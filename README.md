@@ -16,6 +16,7 @@ Recent enhancements include RPM normalization for accurate density estimates, co
 3. For hardware: Connect KryoFlux to PC; ensure drivers installed. DTC.exe is in ../lib/kryoflux_3.50_windows_r2/dtc/.
 
 4. For LLM summaries (optional): Run LM Studio on localhost:1234 (or specify --lm-host) with a local model loaded. Recommended models for clean technical summaries (avoid models that show internal thinking tags):
+   - **Qwen2-Coder Instruct (or Qwen2.5-Coder Instruct)**: Best for JSON-structured outputs and disciplined numeric summaries
    - **Qwen2-7B-Instruct**: Produces clean, technical summaries without thinking tags
    - **Gemma 7B Instruct**: Good for structured technical analysis
    - **Llama 3 8B Instruct**: Reliable but may occasionally show reasoning
@@ -30,7 +31,8 @@ cd FloppyAI/src  # Or run from root with python -m FloppyAI.src.main
 python main.py --help
 ```
 Global options (place before subcommand): --lm-host IP (default: localhost, port fixed to 1234), --lm-model MODEL (default: local-model, name of loaded model in LM Studio).
-Example: python main.py --lm-host 192.168.1.131 --lm-model deepseek-r1-0528-qwen3-8b analyze_disk [path] --summarize
+LLM summary options (for analyze_disk): --lm-temperature FLOAT (default 0.2), --summary-format json|text (default json).
+Example: python main.py --lm-host 192.168.1.131 --lm-model qwen2-coder-instruct analyze_disk [path] --summarize --lm-temperature 0.2 --summary-format json
 
 Note: Commands like analyze_disk do not take positional file arguments; use specific subcommands for single files.
 
@@ -121,7 +123,10 @@ Note: Commands like analyze_disk do not take positional file arguments; use spec
    - --rpm: Known RPM for normalization/validation (default 360; scales partial reads to full rev, computes drift_pct ~0-5%, normalized densities).
    - Outputs surface_map.json: Per-track/side list of files with stats/analysis (normalized mean/std intervals, protection_score 0-1 from anomalies/variance, max_theoretical_density ~rev_time/min_int, is_protected >0.3); includes side summaries (avg_protection, likely_protected) and global (side_diff, packing_potential).
    - Generates combined PNG visualizations for entire disk (intervals, histogram, heatmap) and side_density_heatmap.png (bar charts of density per track/side, highlighting protection asymmetry).
-   - --summarize: Auto-generates LLM-powered human-readable report (llm_summary.txt) via LM Studio (--lm-host HOST:1234, --lm-model MODEL); analyzes protection zones, RPM notes, packing suggestions.
+   - --summarize: Auto-generates LLM-powered report. The tool now requests a strict JSON summary from the LLM and saves it to `llm_summary.json`, then renders the narrative to `llm_summary.txt`.
+     - `--lm-temperature 0.2` recommended for accurate numeric reporting.
+     - `--summary-format json|text` controls whether to write JSON plus text (json, default) or only text (text).
+     - Works best with coder/instruct models like Qwen2-Coder Instruct.
    - Examples:
      - Default batch: `python main.py analyze_disk` (processes example_stream_data/)
      - Full disk dir: `python main.py analyze_disk ..\stream_dumps\GoofyExpress\goofy_express\kryoflux_stream`

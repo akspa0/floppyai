@@ -520,46 +520,183 @@ def analyze_disk(args):
                 api_key="lm-studio"
             )
             # Craft prompt with key insights
-            summary_data = {
-                "global_protection": surface_map['global'].get('global_protection_score', 0),
-                "side0_protection": surface_map['global'].get('side0_protection', 0),
-                "side1_protection": surface_map['global'].get('side1_protection', 0),
-                "protection_diff": surface_map['global'].get('protection_side_diff', 0),
-                "max_density": surface_map['global'].get('global_max_density', 0),
-                "insights": surface_map['global'].get('insights', {}),
-                "rpm_measured": surface_map['global'].get('stats', {}).get('measured_rpm', 0),
-                "num_tracks": total_tracks
+            # Build richer aggregation for summary
+            # Collect actual density estimates per side across entries
+            side_densities = {0: [], 1: []}
+            protection_by_track = {0: [], 1: []}  # list of (track, score)
+            for track in surface_map:
+                if track == 'global':
+                    continue
+                for side in [0, 1]:
+                    for entry in surface_map.get(track, {}).get(side, []):
+                        if isinstance(entry, dict):
+                            if 'analysis' in entry and isinstance(entry['analysis'], dict):
+                                dens = entry['analysis'].get('density_estimate_bits_per_rev')
+                                if isinstance(dens, (int, float)):
+                                    side_densities[side].append(float(dens))
+                                pscore = entry['analysis'].get('protection_score')
+                                if isinstance(pscore, (int, float)):
+                                    protection_by_track[side].append((track, float(pscore)))
+
+            def density_stats(values):
+                if not values:
+                    return {"min": None, "max": None, "avg": None}
+                return {
+                    "min": float(np.min(values)),
+                    "max": float(np.max(values)),
+                    "avg": float(np.mean(values)),
+                }
+
+            topN = 5
+            top_tracks = {
+                0: sorted(protection_by_track[0], key=lambda t: t[1], reverse=True)[:topN],
+                1: sorted(protection_by_track[1], key=lambda t: t[1], reverse=True)[:topN],
             }
-            prompt = f"""
-            You are a floppy disk analysis expert. Summarize the following disk surface analysis in human-readable terms.
-            Focus on protection schemes, surface quality, density potential, RPM notes, and suggestions for custom encoding.
-            Key data: {json.dumps(summary_data, indent=2)}
-            Provide deductions like 'Side 1 shows copy protection via high variance' and packing advice like 'Try density 1.5+ on clean zones'.
-            Keep it concise, 200-400 words.
-            """
+
+            global_stats = surface_map['global'].get('stats', {}) if isinstance(surface_map.get('global'), dict) else {}
+            summary_data = {
+                "counts": {
+                    "found_total": found_total,
+                    "expected_total": expected_total,
+                    "num_tracks": total_tracks,
+                },
+                "rpm": {
+                    "measured": global_stats.get('measured_rpm'),
+                    "drift_pct": global_stats.get('rpm_drift_pct'),
+                },
+                "protection": {
+                    "global_score": surface_map['global'].get('global_protection_score', 0),
+                    "side0_avg": surface_map['global'].get('side0_protection', 0),
+                    "side1_avg": surface_map['global'].get('side1_protection', 0),
+                    "side_diff": surface_map['global'].get('protection_side_diff', 0),
+                    "top_tracks_by_side": {
+                        "0": [{"track": t, "score": s} for t, s in top_tracks[0]],
+                        "1": [{"track": t, "score": s} for t, s in top_tracks[1]],
+                    },
+                },
+                "density": {
+                    "side0": density_stats(side_densities[0]),
+                    "side1": density_stats(side_densities[1]),
+                    "max_theoretical_global": surface_map['global'].get('global_max_density', 0),
+                },
+                "insights": surface_map['global'].get('insights', {}),
+            }
+
+            # Strict JSON-only output prompt
+            schema_description = (
+                "Respond ONLY with a JSON object matching this schema: {\n"
+                "  counts: { found_total: number, expected_total: number, num_tracks: number },\n"
+                "  rpm: { measured: number|null, drift_pct: number|null },\n"
+                "  protection: { global_score: number, side0_avg: number, side1_avg: number, side_diff: number, top_tracks_by_side: { '0': [{track:number, score:number}], '1': [{track:number, score:number}] } },\n"
+                "  density: { side0: {min:number|null, max:number|null, avg:number|null}, side1: {min:number|null, max:number|null, avg:number|null}, max_theoretical_global: number },\n"
+                "  narrative: string  \n"
+                "}. The 'narrative' field must be a concise 150-250 word factual summary derived ONLY from provided numbers. No extra keys, no text outside JSON."
+            )
+
+            system_msg = (
+                "You are an expert in floppy disk magnetic flux analysis."
+                " Output strictly valid JSON per the given schema."
+                " Do NOT include any extra text, code fences, explanations, or hidden reasoning."
+                " If a value is unavailable, use null. Do not invent values."
+            )
+
+            user_prompt = (
+                "JSON schema requirements:\n" + schema_description + "\n\n"
+                "Data:\n" + json.dumps(summary_data, indent=2)
+            )
+
+            def try_parse_json(text: str):
+                # Strip possible code fences
+                stripped = text.strip()
+                if stripped.startswith("```"):
+                    stripped = stripped.strip("`")
+                    # After stripping backticks, try to find first '{'
+                    brace_idx = stripped.find('{')
+                    if brace_idx != -1:
+                        stripped = stripped[brace_idx:]
+                # Remove leading BOM or stray chars before first '{'
+                first_brace = stripped.find('{')
+                if first_brace > 0:
+                    stripped = stripped[first_brace:]
+                return json.loads(stripped)
+
+            # First attempt
             response = client.chat.completions.create(
                 model=args.lm_model,
                 messages=[
-                    {"role": "system", "content": "You are an expert in floppy disk magnetic flux analysis and data encoding. Provide clean technical summaries without any thinking tags, reasoning process, or internal monologue. Output ONLY the final professional analysis - no thinking, no reasoning, no tags. Focus on disk surface characteristics, protection schemes, density optimization, and practical encoding recommendations."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=500,
-                temperature=0.7
+                temperature=getattr(args, 'lm_temperature', 0.2)
             )
-            summary_text = response.choices[0].message.content.strip()
-            # Clean up any thinking tags that might still be present
-            if "<thinking>" in summary_text.lower() and "</thinking>" in summary_text.lower():
-                # Remove thinking section and everything before it
-                thinking_end = summary_text.lower().find("</thinking>") + len("</thinking>")
-                summary_text = summary_text[thinking_end:].strip()
-                # Also remove any remaining thinking tags
-                summary_text = summary_text.replace("<thinking>", "").replace("</thinking>", "").strip()
-            
+            content = response.choices[0].message.content or ""
+
+            parsed_json = None
+            try:
+                parsed_json = try_parse_json(content)
+            except Exception:
+                # Retry once with an explicit reminder
+                retry_prompt = (
+                    "Return ONLY valid JSON per the schema with no extra text. Do not use code fences.\n\n"
+                    "Schema:\n" + schema_description + "\n\nData:\n" + json.dumps(summary_data, indent=2)
+                )
+                response2 = client.chat.completions.create(
+                    model=args.lm_model,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": retry_prompt},
+                    ],
+                    max_tokens=500,
+                    temperature=getattr(args, 'lm_temperature', 0.2)
+                )
+                content2 = response2.choices[0].message.content or ""
+                try:
+                    parsed_json = try_parse_json(content2)
+                except Exception:
+                    parsed_json = None
+
+            # Fallback deterministic JSON if parsing failed
+            if parsed_json is None:
+                parsed_json = {
+                    "counts": summary_data["counts"],
+                    "rpm": summary_data["rpm"],
+                    "protection": summary_data["protection"],
+                    "density": summary_data["density"],
+                    "narrative": (
+                        "Deterministic summary: Analyzed {found}/{expected} files across {tracks} tracks. "
+                        "Measured RPM ~{rpm:.1f} with drift {drift}%. Protection averages — side0 {s0:.2f}, side1 {s1:.2f} (diff {sd:.2f}). "
+                        "Density (bits/rev) — side0 avg {d0avg}, side1 avg {d1avg}."
+                    ).format(
+                        found=summary_data["counts"]["found_total"],
+                        expected=summary_data["counts"]["expected_total"],
+                        tracks=summary_data["counts"]["num_tracks"],
+                        rpm=summary_data["rpm"].get("measured") or 0.0,
+                        drift=(summary_data["rpm"].get("drift_pct") if summary_data["rpm"].get("drift_pct") is not None else 0.0),
+                        s0=summary_data["protection"]["side0_avg"],
+                        s1=summary_data["protection"]["side1_avg"],
+                        sd=summary_data["protection"]["side_diff"],
+                        d0avg=(None if summary_data["density"]["side0"]["avg"] is None else round(summary_data["density"]["side0"]["avg"], 1)),
+                        d1avg=(None if summary_data["density"]["side1"]["avg"] is None else round(summary_data["density"]["side1"]["avg"], 1)),
+                    )
+                }
+
+            # Save JSON
+            json_path = run_dir / "llm_summary.json"
+            with open(json_path, 'w') as jf:
+                json.dump(parsed_json, jf, indent=2)
+
+            # Render text if requested or default
             summary_path = run_dir / "llm_summary.txt"
+            if getattr(args, 'summary_format', 'json') == 'text':
+                narrative = parsed_json.get('narrative', '')
+            else:
+                # Default to generating text from JSON as well
+                narrative = parsed_json.get('narrative', '')
             with open(summary_path, 'w') as f:
                 f.write(f"FloppyAI LLM Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
-                f.write(summary_text)
-            print(f"LLM summary saved to {summary_path}")
+                f.write(narrative)
+            print(f"LLM summary saved to {summary_path} and {json_path}")
         except Exception as e:
             print(f"LLM summary failed (ensure LM Studio running on {args.lm_host}:1234 with model '{args.lm_model}' loaded): {e}")
             print("Skipping summary generation.")
@@ -630,7 +767,9 @@ def main():
     analyze_disk_parser.add_argument("--rpm", type=int, default=360, help="Known RPM for validation (default: 360 for these dumps)")
     analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
     analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
+    analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary generation (default: 0.2)")
     analyze_disk_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered human-readable summary report")
+    analyze_disk_parser.add_argument("--summary-format", choices=["json", "text"], default="json", dest="summary_format", help="Summary output format: 'json' also writes llm_summary.json and renders narrative to txt (default), 'text' writes only txt")
     analyze_disk_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     analyze_disk_parser.set_defaults(func=analyze_disk)
     
