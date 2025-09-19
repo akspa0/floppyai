@@ -1132,101 +1132,104 @@ def analyze_disk(args):
         plt.close()
 
         # Variance by track (both sides)
-        if np.isfinite(var0).any() or np.isfinite(var1).any():
-            plt.figure(figsize=(10,4))
-            if np.isfinite(var0).any():
-                plt.plot(tracks, var0, label='Side 0', color='steelblue')
-            if np.isfinite(var1).any():
-                plt.plot(tracks, var1, label='Side 1', color='indianred')
-            plt.title(f'{label}: Noise Variance by Track')
-            plt.xlabel('Track')
-            plt.ylabel('Avg Variance')
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(str(run_dir / f'{safe_label}_variance_by_track.png'), dpi=150)
-            plt.close()
-
-        # Keep outputs simple: removed top/bottom per-track bar charts
-
-        # Composite report (single large image): flux intervals, histogram, heatmap (if present),
-        # polar disk surface, density-by-track, variance-by-track
-        # Try to load existing flux plots saved earlier by analyzer.visualize
-        base_stem = Path(args.input).stem
-        intervals_img = run_dir / f"{base_stem}_intervals.png"
-        hist_img = run_dir / f"{base_stem}_histogram.png"
-        heatmap_img = run_dir / f"{base_stem}_heatmap.png"
-        polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
-        dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
-        var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
-
-        # Fallback: search within subfolders under run_dir if direct paths missing
-        def find_first(glob_pat):
-            try:
-                hits = list(run_dir.rglob(glob_pat))
-                return hits[0] if hits else None
-            except Exception:
-                return None
-        if not intervals_img.exists():
-            alt = find_first(f"*{base_stem}_intervals.png")
-            if alt: intervals_img = alt
-        if not intervals_img.exists():
-            alt = find_first("entire_disk_intervals.png")
-            if alt: intervals_img = alt
-        if not hist_img.exists():
-            alt = find_first(f"*{base_stem}_histogram.png")
-            if alt: hist_img = alt
-        if not hist_img.exists():
-            alt = find_first("entire_disk_hist.png")
-            if alt: hist_img = alt
-        if not heatmap_img.exists():
-            alt = find_first(f"*{base_stem}_heatmap.png")
-            if alt: heatmap_img = alt
-        if not heatmap_img.exists():
-            alt = find_first("entire_disk_heatmap.png")
-            if alt: heatmap_img = alt
-
-        # Build figure with up to 6 panels
-        import math
-        fig = plt.figure(figsize=(16, 12))
-        title_suffix = f"  •  {density_class}" if density_class else ""
-        fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
-
-        def add_image_subplot(idx, path, title):
-            ax = fig.add_subplot(3, 2, idx)
-            if path.exists():
-                try:
-                    img = plt.imread(str(path))
-                    ax.imshow(img)
-                    ax.set_title(title)
-                    ax.axis('off')
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"Failed to load {path.name}: {e}", ha='center', va='center')
-                    ax.axis('off')
-            else:
-                ax.text(0.5, 0.5, f"Missing {path.name}", ha='center', va='center')
-                ax.axis('off')
-
-        add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
-        add_image_subplot(2, hist_img, 'Flux Interval Histogram')
-        add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
-        add_image_subplot(4, polar_img, 'Disk Surface (density)')
-        add_image_subplot(5, dens_img, 'Density by Track')
-        add_image_subplot(6, var_img, 'Variance by Track')
-
-        comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
-        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-        plt.savefig(str(comp_path), dpi=150)
+        plt.figure(figsize=(10,4))
+        if np.isfinite(var0).any():
+            plt.plot(tracks, var0, label='Side 0', color='steelblue')
+        if np.isfinite(var1).any():
+            plt.plot(tracks, var1, label='Side 1', color='indianred')
+        plt.title(f'{label}: Variance by Track')
+        plt.xlabel('Track')
+        plt.ylabel('Avg Variance')
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(str(run_dir / f'{safe_label}_variance_by_track.png'), dpi=150)
         plt.close()
-        print(f"Composite report saved to {comp_path}")
-        # Save classification tag to text for quick reference
+
+    # Keep outputs simple: removed top/bottom per-track bar charts
+
+    # Composite report (single large image): flux intervals, histogram, heatmap (if present),
+    # polar disk surface, density-by-track, variance-by-track
+    # Try to load existing flux plots saved earlier by analyzer.visualize
+    base_stem = Path(args.input).stem
+    intervals_img = run_dir / f"{base_stem}_intervals.png"
+    hist_img = run_dir / f"{base_stem}_histogram.png"
+    heatmap_img = run_dir / f"{base_stem}_heatmap.png"
+    polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
+    dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
+    var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
+
+    # Fallback: search within subfolders under run_dir if direct paths missing
+    def find_first(glob_pat):
         try:
-            if density_class:
-                with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
-                    cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+            hits = list(run_dir.rglob(glob_pat))
+            return hits[0] if hits else None
         except Exception:
-            pass
-    except Exception as e:
-        print(f"Composite generation failed: {e}")
+            return None
+    if not intervals_img.exists():
+        alt = find_first(f"*{base_stem}_intervals.png")
+        if alt: intervals_img = alt
+    if not intervals_img.exists():
+        alt = find_first("entire_disk_intervals.png")
+        if alt: intervals_img = alt
+    if not hist_img.exists():
+        alt = find_first(f"*{base_stem}_histogram.png")
+        if alt: hist_img = alt
+    if not hist_img.exists():
+        alt = find_first("entire_disk_hist.png")
+        if alt: hist_img = alt
+    if not heatmap_img.exists():
+        alt = find_first(f"*{base_stem}_heatmap.png")
+        if alt: heatmap_img = alt
+    if not heatmap_img.exists():
+        alt = find_first("entire_disk_heatmap.png")
+        if alt: heatmap_img = alt
+    if not polar_img.exists():
+        alt = find_first(f"*{safe_label}_surface_disk_surface.png")
+        if alt: polar_img = alt
+    if not polar_img.exists():
+        alt = find_first("*_disk_surface.png")
+        if alt: polar_img = alt
+
+    # Build figure with up to 6 panels
+    import math
+    fig = plt.figure(figsize=(16, 12))
+    title_suffix = f"  •  {density_class}" if density_class else ""
+    fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
+
+    def add_image_subplot(idx, path, title):
+        ax = fig.add_subplot(3, 2, idx)
+        if path.exists():
+            try:
+                img = plt.imread(str(path))
+                ax.imshow(img)
+                ax.set_title(title)
+                ax.axis('off')
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Failed to load {path.name}: {e}", ha='center', va='center')
+                ax.axis('off')
+        else:
+            ax.text(0.5, 0.5, f"Missing {path.name}", ha='center', va='center')
+            ax.axis('off')
+
+    add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
+    add_image_subplot(2, hist_img, 'Flux Interval Histogram')
+    add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
+    add_image_subplot(4, polar_img, 'Disk Surface (density)')
+    add_image_subplot(5, dens_img, 'Density by Track')
+    add_image_subplot(6, var_img, 'Variance by Track')
+
+    comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.savefig(str(comp_path), dpi=150)
+    plt.close()
+    print(f"Composite report saved to {comp_path}")
+    # Save classification tag to text for quick reference
+    try:
+        if density_class:
+            with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
+                cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+    except Exception:
+        pass
     total_tracks = len(surface_map) - 1  # exclude global
     total_entries = sum(len(sides) for sides in surface_map.values()) - 1
     global_insights = surface_map['global'].get('insights', {})
