@@ -1177,14 +1177,28 @@ def analyze_disk(args):
         else:
             vmin, vmax = 0.0, 1.0
 
-        # Build grids once
-        theta = np.linspace(0, 2*np.pi, 360)
-        r = np.arange(T)
-        TH, R = np.meshgrid(theta, r)  # shapes: (T, 360)
+        # Upsample radial resolution for smoother rendering
+        up_factor = 4
+        Tu = max(T * up_factor, T)
+        r_up = np.linspace(0, T-1, Tu)
+        def upsample(radial, has):
+            if has.sum() >= 2:
+                xs = np.where(has)[0]
+                ys = radial[has]
+                return np.interp(r_up, xs, ys)
+            # If no/one sample, flat fill
+            fill = float(radial[has][0]) if has.any() else 0.0
+            return np.full_like(r_up, fill, dtype=float)
+
+        radial_up = {s: upsample(radials[s], masks[s]) for s in [0,1]}
+
+        # Build high-fidelity grids
+        theta = np.linspace(0, 2*np.pi, 1440)
+        TH, R = np.meshgrid(theta, r_up)
 
         # Layout: side0 | side1 | colorbar
         from matplotlib.gridspec import GridSpec
-        fig = plt.figure(figsize=(12, 5))
+        fig = plt.figure(figsize=(13, 5.5))
         gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
         ax0 = fig.add_subplot(gs[0, 0], projection='polar')
         ax1 = fig.add_subplot(gs[0, 1], projection='polar')
@@ -1192,10 +1206,8 @@ def analyze_disk(args):
 
         pcm = None
         for ax, side in [(ax0, 0), (ax1, 1)]:
-            radial = radials[side]
-            has = masks[side]
-            if has.any():
-                Z = np.repeat(radial[:, None], theta.shape[0], axis=1)  # (T, 360)
+            if masks[side].any():
+                Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)  # (Tu, ntheta)
                 pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
                 ax.set_ylim(0, T)
                 ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
@@ -1213,7 +1225,7 @@ def analyze_disk(args):
 
         plt.tight_layout()
         outfile = Path(str(out_prefix) + "_disk_surface.png")
-        plt.savefig(str(outfile), dpi=150)
+        plt.savefig(str(outfile), dpi=220)
         plt.close()
         print(f"Disk surface saved to {outfile}")
 
@@ -1228,9 +1240,12 @@ def analyze_disk(args):
                 radial[ti] = float(instab_scores.get(side, {}).get(ti, 0.0))
             radials[side] = radial
         vmin, vmax = 0.0, 1.0
-        theta = np.linspace(0, 2*np.pi, 360)
-        r = np.arange(T)
-        TH, R = np.meshgrid(theta, r)
+        # Upsample radial for smoother rings
+        up_factor = 4
+        Tu = max(T * up_factor, T)
+        r_up = np.linspace(0, T-1, Tu)
+        theta = np.linspace(0, 2*np.pi, 1440)
+        TH, R = np.meshgrid(theta, r_up)
         from matplotlib.gridspec import GridSpec
         fig = plt.figure(figsize=(12, 5))
         gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
@@ -1239,7 +1254,9 @@ def analyze_disk(args):
         cax = fig.add_subplot(gs[0, 2])
         pcm = None
         for ax, side in [(ax0, 0), (ax1, 1)]:
-            Z = np.repeat(radials[side][:, None], theta.shape[0], axis=1)
+            # Linear upsample across radius
+            Zr = np.interp(r_up, np.arange(T), radials[side])
+            Z = np.repeat(Zr[:, None], theta.shape[0], axis=1)
             pcm = ax.pcolormesh(TH, R, Z, cmap='magma', vmin=vmin, vmax=vmax, shading='auto')
             ax.set_ylim(0, T)
             ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
@@ -1250,7 +1267,7 @@ def analyze_disk(args):
             cbar.set_label('Instability Score (0-1)')
         plt.tight_layout()
         outfile = Path(str(out_prefix) + "_instability_map.png")
-        plt.savefig(str(outfile), dpi=150)
+        plt.savefig(str(outfile), dpi=220)
         plt.close()
         print(f"Instability map saved to {outfile}")
 
@@ -1432,7 +1449,7 @@ def analyze_disk(args):
 
         comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
         plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-        plt.savefig(str(comp_path), dpi=150)
+        plt.savefig(str(comp_path), dpi=220)
         plt.close()
         print(f"Composite report saved to {comp_path}")
         # CSV export for per-track/side structure and instability scores
