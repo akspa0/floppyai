@@ -540,13 +540,21 @@ def analyze_disk(args):
             response = client.chat.completions.create(
                 model=args.lm_model,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant specialized in floppy disk flux analysis."},
+                    {"role": "system", "content": "You are an expert in floppy disk magnetic flux analysis and data encoding. Provide clean technical summaries without any thinking tags, reasoning process, or internal monologue. Output ONLY the final professional analysis - no thinking, no reasoning, no tags. Focus on disk surface characteristics, protection schemes, density optimization, and practical encoding recommendations."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
                 temperature=0.7
             )
             summary_text = response.choices[0].message.content.strip()
+            # Clean up any thinking tags that might still be present
+            if "<thinking>" in summary_text.lower() and "</thinking>" in summary_text.lower():
+                # Remove thinking section and everything before it
+                thinking_end = summary_text.lower().find("</thinking>") + len("</thinking>")
+                summary_text = summary_text[thinking_end:].strip()
+                # Also remove any remaining thinking tags
+                summary_text = summary_text.replace("<thinking>", "").replace("</thinking>", "").strip()
+            
             summary_path = run_dir / "llm_summary.txt"
             with open(summary_path, 'w') as f:
                 f.write(f"FloppyAI LLM Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")

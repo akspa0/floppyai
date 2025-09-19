@@ -15,7 +15,13 @@ Recent enhancements include RPM normalization for accurate density estimates, co
 
 3. For hardware: Connect KryoFlux to PC; ensure drivers installed. DTC.exe is in ../lib/kryoflux_3.50_windows_r2/dtc/.
 
-4. For LLM summaries (optional): Run LM Studio on localhost:1234 (or specify --lm-host) with a local model loaded (e.g., Llama 3 8B; specify --lm-model).
+4. For LLM summaries (optional): Run LM Studio on localhost:1234 (or specify --lm-host) with a local model loaded. Recommended models for clean technical summaries (avoid models that show internal thinking tags):
+   - **Qwen2-7B-Instruct**: Produces clean, technical summaries without thinking tags
+   - **Gemma 7B Instruct**: Good for structured technical analysis
+   - **Llama 3 8B Instruct**: Reliable but may occasionally show reasoning
+   - **Mistral 7B Instruct**: Efficient but test for clean output
+
+   The system prompt explicitly instructs models to avoid thinking tags and provide only final professional summaries. For best results, test models to ensure they follow the "output only final analysis" instruction.
 
 ## Usage
 Run from FloppyAI/ directory or src/ subdirectory:
