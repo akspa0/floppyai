@@ -69,16 +69,18 @@ class FluxAnalyzer:
         
         # Compute basic stats
         if len(self.flux_data) > 0:
-            rev_time_ns = np.sum(self.flux_data) / max(1, len(self.revolutions))
+            total_time_ns = np.sum(self.flux_data)
+            rev_time_ns = total_time_ns / max(1, len(self.revolutions))
             self.stats = {
                 'total_fluxes': len(self.flux_data),
                 'mean_interval_ns': float(np.mean(self.flux_data)),
                 'std_interval_ns': float(np.std(self.flux_data)),
                 'min_interval_ns': int(np.min(self.flux_data)),
                 'max_interval_ns': int(np.max(self.flux_data)),
-                'total_revolution_time_ns': float(np.sum(self.flux_data)),
+                'total_measured_time_ns': float(total_time_ns),
+                'measured_rev_time_ns': float(rev_time_ns),
                 'num_revolutions': len(self.revolutions),
-                'expected_rpm': 60000000000 / rev_time_ns if rev_time_ns > 0 else 0,
+                'inferred_rpm': 60000000000 / rev_time_ns if rev_time_ns > 0 else 0,
             }
         else:
             self.stats = {}
@@ -125,9 +127,12 @@ class FluxAnalyzer:
         
         # Simple noise profile: Variance per revolution
         rev_variances = [np.var(rev) for rev in self.revolutions if len(rev) > 0]
+        rev_times = [np.sum(rev) for rev in self.revolutions if len(rev) > 0]
+        rpm_stability = np.std(rev_times) / np.mean(rev_times) if rev_times else 0  # Relative std of rev times
         noise_profile = {
             'avg_variance': np.mean(rev_variances) if rev_variances else 0,
-            'high_noise_revs': [i for i, v in enumerate(rev_variances) if v > np.mean(rev_variances) + std] if rev_variances else []
+            'high_noise_revs': [i for i, v in enumerate(rev_variances) if v > np.mean(rev_variances) + std] if rev_variances else [],
+            'rpm_stability': rpm_stability
         }
         
         # For weak bits: Compare revolutions (inconsistent timings indicate weak)

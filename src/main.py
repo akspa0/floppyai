@@ -22,6 +22,7 @@ import glob
 import json
 import re
 import numpy as np
+import matplotlib.pyplot as plt
 
 def get_output_dir(output_dir=None):
     """Get or create timestamped output directory."""
@@ -354,17 +355,29 @@ def analyze_disk(args):
     for track in surface_map:
         for side in surface_map[track]:
             entries = surface_map[track][side]
-            if len(entries) > 1:
+            data_entries = [e for e in entries if 'stats' in e and not e.get('aggregate', False)]  # Filter data only
+            if len(data_entries) > 1:
                 # Simple aggregate: average stats
                 avg_stats = {}
                 for key in ['mean_interval_ns', 'std_interval_ns', 'total_fluxes']:
-                    values = [e['stats'].get(key, 0) for e in entries]
+                    values = [e['stats'].get(key, 0) for e in data_entries]
                     avg_stats[key] = np.mean(values) if values else 0
                 # Add as special entry
                 surface_map[track][side].append({
                     'aggregate': True,
                     'stats': avg_stats,
                     'analysis': 'Aggregated across files'
+                })
+            
+            # Add side-specific summary (after aggregation)
+            if len(data_entries) >= 1:
+                avg_protection = np.mean([e['analysis'].get('protection_score', 0) for e in data_entries])
+                side_max_density = np.mean([e['analysis'].get('max_theoretical_density_bits_per_rev', 0) for e in data_entries])
+                surface_map[track][side].append({
+                    'side_summary': True,
+                    'avg_protection_score': float(avg_protection),
+                    'avg_max_density': int(side_max_density),
+                    'likely_protected': avg_protection > 0.3
                 })
     
     # Global aggregation for entire disk visualization and analysis
@@ -386,15 +399,18 @@ def analyze_disk(args):
         
         # Compute global stats
         if len(global_flux) > 0:
+            total_time = np.sum(global_flux)
+            rev_time = total_time / max(1, total_revs)
             global_stats = {
                 'total_fluxes': len(global_flux),
                 'mean_interval_ns': float(np.mean(global_flux)),
                 'std_interval_ns': float(np.std(global_flux)),
                 'min_interval_ns': int(np.min(global_flux)),
                 'max_interval_ns': int(np.max(global_flux)),
-                'total_revolution_time_ns': float(total_flux_sum),
+                'total_revolution_time_ns': float(total_time),
                 'num_revolutions': total_revs,
-                'expected_rpm': 60000000000 / (total_flux_sum / total_revs) if total_revs > 0 and total_flux_sum > 0 else 0,
+                'measured_rev_time_ns': float(rev_time),
+                'measured_rpm': 60000000000 / rev_time if rev_time > 0 else 0,
             }
             global_analyzer.stats = global_stats
             
@@ -402,12 +418,17 @@ def analyze_disk(args):
             rpm_drift = None
             if args.rpm:
                 expected_rev_time = 60000000000 / args.rpm
-                actual_rev_time = total_flux_sum / total_revs if total_revs > 0 else 0
-                rpm_drift = ((actual_rev_time - expected_rev_time) / expected_rev_time * 100) if expected_rev_time > 0 else 0
-                print(f"RPM validation: Expected {args.rpm} RPM, actual ~{global_stats['expected_rpm']:.1f} RPM, drift {rpm_drift:.2f}%")
+                actual_rev_time = rev_time
+                rpm_drift = abs((actual_rev_time - expected_rev_time) / expected_rev_time * 100)
+                print(f"RPM validation: Expected {args.rpm} RPM, measured ~{global_stats['measured_rpm']:.1f} RPM, drift {rpm_drift:.2f}% (stable if <1%)")
                 global_stats['rpm_drift_pct'] = rpm_drift
+                # Normalize global for known RPM
+                global_scale = expected_rev_time / actual_rev_time if actual_rev_time > 0 else 1.0
+                global_stats['normalized_scale'] = global_scale
+                global_stats['estimated_full_fluxes'] = len(global_flux) * global_scale
+                global_stats['density_bits_per_full_rev'] = int(8 * global_stats['estimated_full_fluxes'])
             else:
-                print(f"Global expected RPM: {global_stats['expected_rpm']:.1f} (use --rpm 360 for validation)")
+                print(f"Global measured RPM: {global_stats['measured_rpm']:.1f} (use --rpm 360 for normalization and validation)")
         
         # Single global visualizations for entire disk
         global_base = str(run_dir / "entire_disk")
@@ -417,12 +438,62 @@ def analyze_disk(args):
             global_analyzer.visualize(global_base, "heatmap")
         print("Global disk visualizations saved with prefix 'entire_disk_'")
         
+        global_analysis = global_analyzer.analyze()
+        
+        # Global protection insights
+        # Safe means, default 0 if empty
+        protection_values = [entry['analysis'].get('protection_score', 0) for track in surface_map if track != 'global' for side in surface_map[track] for entry in surface_map[track][side] if isinstance(entry, dict) and 'analysis' in entry and 'protection_score' in entry['analysis']]
+        max_density_values = [entry['analysis'].get('max_theoretical_density_bits_per_rev', 0) for track in surface_map if track != 'global' for side in surface_map[track] for entry in surface_map[track][side] if isinstance(entry, dict) and 'analysis' in entry and 'max_theoretical_density_bits_per_rev' in entry['analysis']]
+        global_protection = np.mean(protection_values) if protection_values else 0.0
+        global_max_density = np.mean(max_density_values) if max_density_values else 0
+        
+        side0_protection_values = [entry['analysis'].get('protection_score', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(0, []) if isinstance(entry, dict) and 'analysis' in entry and 'protection_score' in entry['analysis']]
+        side1_protection_values = [entry['analysis'].get('protection_score', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(1, []) if isinstance(entry, dict) and 'analysis' in entry and 'protection_score' in entry['analysis']]
+        side0_protection = np.mean(side0_protection_values) if side0_protection_values else 0.0
+        side1_protection = np.mean(side1_protection_values) if side1_protection_values else 0.0
+        side_diff = abs(side0_protection - side1_protection)
+        
+        # Side-specific globals
+        side0_protection = np.mean([a.get('protection_score', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(0, []) if isinstance(entry, dict) and 'protection_score' in entry])
+        side1_protection = np.mean([a.get('protection_score', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(1, []) if isinstance(entry, dict) and 'protection_score' in entry])
+        side_diff = abs(side0_protection - side1_protection)
+        
+        # Save per-side heatmaps if >1 track
+        if len(surface_map) > 2:  # >1 track + global
+            side0_densities = [entry.get('analysis', {}).get('density_estimate_bits_per_rev', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(0, []) if 'analysis' in entry]
+            side1_densities = [entry.get('analysis', {}).get('density_estimate_bits_per_rev', 0) for track in surface_map if track != 'global' for entry in surface_map[track].get(1, []) if 'analysis' in entry]
+            if side0_densities and side1_densities:
+                fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+                axs[0].bar(range(len(side0_densities)), side0_densities)
+                axs[0].set_title('Side 0 Density per Track')
+                axs[0].set_xlabel('Track')
+                axs[0].set_ylabel('Bits per Rev')
+                axs[1].bar(range(len(side1_densities)), side1_densities)
+                axs[1].set_title('Side 1 Density per Track')
+                axs[1].set_xlabel('Track')
+                axs[1].set_ylabel('Bits per Rev')
+                plt.tight_layout()
+                plt.savefig(str(run_dir / 'side_density_heatmap.png'), dpi=150)
+                plt.close()
+                print("Side density comparison saved to side_density_heatmap.png")
+            else:
+                print("Skipping side heatmap: insufficient data on one or both sides")
+        
         # Add global summary to surface_map
         surface_map['global'] = {
             'stats': global_stats,
-            'analysis': global_analyzer.analyze(),
-            'num_tracks': len(surface_map) - 1,  # exclude global
-            'num_sides': sum(len(sides) for sides in surface_map.values()) - 1
+            'analysis': global_analysis,
+            'num_tracks': len(surface_map) - 1,
+            'num_sides': sum(len(sides) for sides in surface_map.values()) - 1,
+            'global_protection_score': float(global_protection),
+            'global_max_density': int(global_max_density),
+            'side0_protection': float(side0_protection),
+            'side1_protection': float(side1_protection),
+            'protection_side_diff': float(side_diff),
+            'insights': {
+                'likely_copy_protection_on_side': '1' if side1_protection > side0_protection + 0.1 else '0' if side0_protection > side1_protection + 0.1 else 'balanced',
+                'packing_potential': f"Up to {global_max_density} bits/rev feasible with variable cells; current avg {global_analysis.get('density_estimate_bits_per_rev', 0)}; try density>1.5 in encode for protection-like schemes"
+            }
         }
     else:
         print("No flux data overall")
@@ -432,9 +503,11 @@ def analyze_disk(args):
     with open(map_path, 'w') as f:
         json.dump(surface_map, f, indent=2, default=str)
     print(f"Surface map saved to {map_path}")
-    total_tracks = len(surface_map)
-    total_entries = sum(len(sides) for sides in surface_map.values())
+    total_tracks = len(surface_map) - 1  # exclude global
+    total_entries = sum(len(sides) for sides in surface_map.values()) - 1
+    global_insights = surface_map['global'].get('insights', {})
     print(f"Analyzed {total_tracks} tracks across {total_entries} sides (found {found_total}/{expected_total})")
+    print(f"Global insights: {global_insights}")
     return 0
 
 def main():
