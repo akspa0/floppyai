@@ -23,6 +23,8 @@ import json
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+import openai
 
 def get_output_dir(output_dir=None):
     """Get or create timestamped output directory."""
@@ -508,6 +510,52 @@ def analyze_disk(args):
     global_insights = surface_map['global'].get('insights', {})
     print(f"Analyzed {total_tracks} tracks across {total_entries} sides (found {found_total}/{expected_total})")
     print(f"Global insights: {global_insights}")
+
+    # LLM Summary if requested
+    if args.summarize:
+        try:
+            host_port = args.lm_host if ':' in args.lm_host else f"{args.lm_host}:1234"
+            client = openai.OpenAI(
+                base_url=f"http://{host_port}/v1",
+                api_key="lm-studio"
+            )
+            # Craft prompt with key insights
+            summary_data = {
+                "global_protection": surface_map['global'].get('global_protection_score', 0),
+                "side0_protection": surface_map['global'].get('side0_protection', 0),
+                "side1_protection": surface_map['global'].get('side1_protection', 0),
+                "protection_diff": surface_map['global'].get('protection_side_diff', 0),
+                "max_density": surface_map['global'].get('global_max_density', 0),
+                "insights": surface_map['global'].get('insights', {}),
+                "rpm_measured": surface_map['global'].get('stats', {}).get('measured_rpm', 0),
+                "num_tracks": total_tracks
+            }
+            prompt = f"""
+            You are a floppy disk analysis expert. Summarize the following disk surface analysis in human-readable terms.
+            Focus on protection schemes, surface quality, density potential, RPM notes, and suggestions for custom encoding.
+            Key data: {json.dumps(summary_data, indent=2)}
+            Provide deductions like 'Side 1 shows copy protection via high variance' and packing advice like 'Try density 1.5+ on clean zones'.
+            Keep it concise, 200-400 words.
+            """
+            response = client.chat.completions.create(
+                model=args.lm_model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant specialized in floppy disk flux analysis."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            summary_text = response.choices[0].message.content.strip()
+            summary_path = run_dir / "llm_summary.txt"
+            with open(summary_path, 'w') as f:
+                f.write(f"FloppyAI LLM Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
+                f.write(summary_text)
+            print(f"LLM summary saved to {summary_path}")
+        except Exception as e:
+            print(f"LLM summary failed (ensure LM Studio running on {args.lm_host}:1234 with model '{args.lm_model}' loaded): {e}")
+            print("Skipping summary generation.")
+
     return 0
 
 def main():
@@ -572,6 +620,9 @@ def main():
     analyze_disk_parser.add_argument("--track", type=int, help="Manual track number if not parsable from filename")
     analyze_disk_parser.add_argument("--side", type=int, choices=[0, 1], help="Manual side number if not parsable from filename")
     analyze_disk_parser.add_argument("--rpm", type=int, default=360, help="Known RPM for validation (default: 360 for these dumps)")
+    analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
+    analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
+    analyze_disk_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered human-readable summary report")
     analyze_disk_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     analyze_disk_parser.set_defaults(func=analyze_disk)
     

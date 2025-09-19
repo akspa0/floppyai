@@ -2,6 +2,8 @@
 numpy>=1.20.0
 scipy>=1.7.0
 matplotlib>=3.5.0
+requests>=2.25.0  # For any remaining API calls if needed
+openai>=1.0.0  # For LM Studio API integration (OpenAI-compatible)
 # AI/ML deps:
 scikit-learn>=1.0.0
 torch>=1.12.0
