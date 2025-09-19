@@ -106,6 +106,9 @@ def analyze_corpus(args):
     run_dir = get_output_dir(args.output_dir)
     inputs = []
     base = Path(args.inputs)
+    # Ensure dedicated corpus folder for all corpus-level outputs
+    corpus_dir = run_dir / 'corpus'
+    corpus_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve effective RPM from profile or explicit value
     rpm_profile_map = {
@@ -169,6 +172,11 @@ def analyze_corpus(args):
         test_out = Path('test_outputs')
         if test_out.exists():
             found.update(test_out.rglob('surface_map.json'))
+        # Also include any surface_map.json created in this run directory
+        try:
+            found.update(run_dir.rglob('surface_map.json'))
+        except Exception:
+            pass
         inputs = sorted(found)
     elif base.name.endswith('.json'):
         inputs = [base]
@@ -303,7 +311,7 @@ def analyze_corpus(args):
         'per_disk': per_disk,
     }
 
-    out_path = run_dir / 'corpus_summary.json'
+    out_path = corpus_dir / 'corpus_summary.json'
     with open(out_path, 'w') as f:
         json.dump(corpus_summary, f, indent=2)
     print(f"Corpus summary saved to {out_path}")
@@ -318,7 +326,7 @@ def analyze_corpus(args):
             plt.xlabel('Bits per Revolution')
             plt.ylabel('Count')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side0_density_hist.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side0_density_hist.png'), dpi=150)
             plt.close()
         if all_side1:
             plt.figure(figsize=(8,4))
@@ -327,7 +335,7 @@ def analyze_corpus(args):
             plt.xlabel('Bits per Revolution')
             plt.ylabel('Count')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side1_density_hist.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side1_density_hist.png'), dpi=150)
             plt.close()
 
         # Boxplots of density by disk for each side
@@ -339,7 +347,7 @@ def analyze_corpus(args):
             plt.ylabel('Bits per Revolution')
             plt.xticks(range(1, len(disk_labels)+1), disk_labels, rotation=45, ha='right')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side0_density_boxplot.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side0_density_boxplot.png'), dpi=150)
             plt.close()
         if any(len(x) for x in plot_side1_by_disk):
             plt.figure(figsize=(max(8, len(plot_side1_by_disk)*0.6), 5))
@@ -349,7 +357,7 @@ def analyze_corpus(args):
             plt.ylabel('Bits per Revolution')
             plt.xticks(range(1, len(disk_labels)+1), disk_labels, rotation=45, ha='right')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side1_density_boxplot.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side1_density_boxplot.png'), dpi=150)
             plt.close()
 
         # Scatter of density vs variance across all entries per side (if variance available)
@@ -360,7 +368,7 @@ def analyze_corpus(args):
             plt.xlabel('Bits per Revolution')
             plt.ylabel('Avg Variance')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side0_density_vs_variance.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side0_density_vs_variance.png'), dpi=150)
             plt.close()
         if all_side1 and all_side1_var:
             plt.figure(figsize=(6,5))
@@ -369,7 +377,7 @@ def analyze_corpus(args):
             plt.xlabel('Bits per Revolution')
             plt.ylabel('Avg Variance')
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side1_density_vs_variance.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side1_density_vs_variance.png'), dpi=150)
             plt.close()
         print("Corpus visualizations saved (histograms, boxplots, scatter plots)")
         # Overlay density curves per disk (approximate via normalized histograms)
@@ -390,7 +398,7 @@ def analyze_corpus(args):
             plt.ylabel('Normalized Density')
             plt.legend(fontsize=8, ncol=2)
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side0_density_overlays.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side0_density_overlays.png'), dpi=150)
             plt.close()
         if any(len(x) for x in plot_side1_by_disk):
             plt.figure(figsize=(9,5))
@@ -408,7 +416,7 @@ def analyze_corpus(args):
             plt.ylabel('Normalized Density')
             plt.legend(fontsize=8, ncol=2)
             plt.tight_layout()
-            plt.savefig(str(run_dir / 'corpus_side1_density_overlays.png'), dpi=150)
+            plt.savefig(str(corpus_dir / 'corpus_side1_density_overlays.png'), dpi=150)
             plt.close()
 
         # Per-disk track vs density scatter saved in corpus folder
@@ -425,12 +433,11 @@ def analyze_corpus(args):
                     from mpl_toolkits.axes_grid1 import make_axes_locatable
                     # Use the last axes to anchor the colorbar
                     divider = make_axes_locatable(axs)
-                    cax = divider.append_axes("right", size="5%", pad=0.1)
                     cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
                     cbar.set_label('Bits per Revolution')
                 plt.tight_layout()
                 safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
-                plt.savefig(str(run_dir / f'corpus_tracks_side0_{safe_label}.png'), dpi=150)
+                plt.savefig(str(run_dir / 'corpus' / f'corpus_tracks_side0_{safe_label}.png'), dpi=150)
                 plt.close()
         for label, tracks in per_disk_tracks_side1:
             if tracks:
@@ -441,8 +448,7 @@ def analyze_corpus(args):
                 plt.xlabel('Track Index')
                 plt.ylabel('Bits per Revolution')
                 plt.tight_layout()
-                safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
-                plt.savefig(str(run_dir / f'corpus_tracks_side1_{safe_label}.png'), dpi=150)
+                plt.savefig(str(run_dir / 'corpus' / f'corpus_tracks_side1_{safe_label}.png'), dpi=150)
                 plt.close()
 
         # Surfaces montage across all disks (one image per disk)
@@ -488,10 +494,18 @@ def analyze_corpus(args):
                         ax.text(0.5, 0.5, f"Failed: {Path(ipath).name}", ha='center', va='center')
                     ax.axis('off')
                 plt.tight_layout()
-                grid_path = run_dir / 'corpus_surfaces_grid.png'
+                grid_path = corpus_dir / 'corpus_surfaces_grid.png'
                 plt.savefig(str(grid_path), dpi=220)
                 plt.close()
                 print(f"Corpus surfaces montage saved to {grid_path}")
+                # Convenience copy into disks/ to aid browsing
+                try:
+                    disks_dir2 = run_dir / 'disks'
+                    disks_dir2.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copyfile(str(grid_path), str(disks_dir2 / '_corpus_surfaces_grid.png'))
+                except Exception:
+                    pass
             else:
                 print("No disk surface images found for montage; run analyze_corpus with --generate-missing or ensure per-disk outputs exist.")
         except Exception as em:
@@ -537,7 +551,7 @@ def analyze_corpus(args):
                             ax.text(0.5, 0.5, f"Failed: {Path(ipath).name}", ha='center', va='center')
                         ax.axis('off')
                     plt.tight_layout()
-                    outp = run_dir / out_name
+                    outp = corpus_dir / out_name
                     plt.savefig(str(outp), dpi=220)
                     plt.close()
                     print(f"Corpus side{side} surfaces montage saved to {outp}")
@@ -588,10 +602,10 @@ def analyze_corpus(args):
                     'side1': summary_data['side1'],
                     'narrative': 'No valid density measurements found across the provided disks. Verify inputs contain surface_map.json with analysis.density_estimate_bits_per_rev populated.'
                 }
-                llm_json = run_dir / 'llm_corpus_summary.json'
+                llm_json = corpus_dir / 'llm_corpus_summary.json'
                 with open(llm_json, 'w') as jf:
                     json.dump(parsed, jf, indent=2)
-                llm_txt = run_dir / 'llm_corpus_summary.txt'
+                llm_txt = corpus_dir / 'llm_corpus_summary.txt'
                 with open(llm_txt, 'w') as tf:
                     tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
                     tf.write(parsed.get('narrative', ''))
@@ -691,10 +705,10 @@ def analyze_corpus(args):
                     )
                 }
 
-            llm_json = run_dir / 'llm_corpus_summary.json'
+            llm_json = corpus_dir / 'llm_corpus_summary.json'
             with open(llm_json, 'w') as jf:
                 json.dump(parsed, jf, indent=2)
-            llm_txt = run_dir / 'llm_corpus_summary.txt'
+            llm_txt = corpus_dir / 'llm_corpus_summary.txt'
             with open(llm_txt, 'w') as tf:
                 tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
                 tf.write(parsed.get('narrative', ''))
@@ -702,6 +716,7 @@ def analyze_corpus(args):
         except Exception as e:
             print(f"LLM corpus summary failed: {e}")
             print("Skipping corpus summary generation.")
+    print(f"Corpus outputs saved to {corpus_dir}")
     return 0
 
 def classify_surface(args):
