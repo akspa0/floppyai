@@ -496,6 +496,58 @@ def analyze_corpus(args):
                 print("No disk surface images found for montage; run analyze_corpus with --generate-missing or ensure per-disk outputs exist.")
         except Exception as em:
             print(f"Failed to build corpus surfaces montage: {em}")
+
+        # Side-specific surfaces montages (side 0 and side 1)
+        try:
+            def build_side_grid(side: int, out_name: str):
+                images = []
+                disks_dir = run_dir / 'disks'
+                if disks_dir.exists():
+                    for d in sorted([p for p in disks_dir.iterdir() if p.is_dir()]):
+                        cand = None
+                        # Prefer canonical side images
+                        fp = d / f"{d.name}_surface_side{side}.png"
+                        if fp.exists():
+                            cand = fp
+                        else:
+                            hits = list(d.glob(f"*_surface_side{side}.png"))
+                            if hits:
+                                cand = hits[0]
+                        if cand is not None:
+                            images.append((d.name, cand))
+                if not images:
+                    # Fallback: near each surface_map.json's directory
+                    for mp, _ in corpus:
+                        pdir = Path(mp).parent
+                        hits = list(pdir.glob(f"*_surface_side{side}.png"))
+                        if hits:
+                            images.append((pdir.name, hits[0]))
+                if images:
+                    n = len(images)
+                    cols = min(5, max(2, int(np.ceil(np.sqrt(n)))))
+                    rows = int(np.ceil(n / cols))
+                    fig = plt.figure(figsize=(cols*4.0, rows*4.0))
+                    for i, (lbl, ipath) in enumerate(images, start=1):
+                        ax = fig.add_subplot(rows, cols, i)
+                        try:
+                            img = plt.imread(str(ipath))
+                            ax.imshow(img)
+                            ax.set_title(lbl, fontsize=9)
+                        except Exception:
+                            ax.text(0.5, 0.5, f"Failed: {Path(ipath).name}", ha='center', va='center')
+                        ax.axis('off')
+                    plt.tight_layout()
+                    outp = run_dir / out_name
+                    plt.savefig(str(outp), dpi=220)
+                    plt.close()
+                    print(f"Corpus side{side} surfaces montage saved to {outp}")
+                else:
+                    print(f"No side {side} surface images found for montage.")
+
+            build_side_grid(0, 'corpus_side0_surfaces_grid.png')
+            build_side_grid(1, 'corpus_side1_surfaces_grid.png')
+        except Exception as em2:
+            print(f"Failed to build side-specific montages: {em2}")
     except Exception as e:
         print(f"Corpus visualization generation failed: {e}")
 

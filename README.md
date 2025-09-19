@@ -22,15 +22,18 @@ FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnet
 2) Run corpus analysis
 ```
 cd FloppyAI/src
-python main.py analyze_corpus ..\stream_dumps --generate-missing --rpm 360 --summarize \
+python main.py analyze_corpus ..\stream_dumps --generate-missing --rpm 360.0 --summarize \
   --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0
 ```
 - `--generate-missing` processes each disk with `analyze_disk`.
-- `--rpm 360` assumes a 1.2MB 5.25" drive.
+- `--rpm 360.0` assumes a 1.2MB 5.25" drive.
 
 3) Inspect outputs
-- One image per disk: `test_outputs/<timestamp>/disks/<disk-label>/<disk-label>_composite.png`
-- Standalone polar disk surface: `.../<disk-label>_disk_surface.png`
+- One image per disk: `test_outputs/<timestamp>/disks/<disk-label>/<disk-label>_composite.png` (now includes Instability Map panel)
+- Standalone polar disk surface (both sides): `.../<disk-label>_disk_surface.png`
+- High‑res side images: `.../<disk-label>_surface_side0.png`, `.../<disk-label>_surface_side1.png`
+- Instability summary CSV: `.../<disk-label>_instability_summary.csv`
+- Corpus surfaces montages: `corpus_surfaces_grid.png`, `corpus_side0_surfaces_grid.png`, `corpus_side1_surfaces_grid.png`
 - Corpus summary and plots: `test_outputs/<timestamp>/corpus_*` and `corpus_summary.json`
 
 4) Interpret the composite
@@ -54,17 +57,22 @@ python main.py --help
 
 ### analyze_corpus
 ```
-python main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm 360] [--summarize] \
+python main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] \
   [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
 Outputs are placed under `test_outputs/<timestamp>/disks/<disk-label>/`. If you provide `--output-dir` to analyze_corpus, that directory is used instead of a timestamp.
 
+Notes on RPM/Profile:
+- `--rpm` accepts any float; if provided, it overrides `--profile`.
+- `--profile` maps common drives to RPM: `35HD`/`35DD` → 300, `525HD` → 360, `525DD` → 300.
+- `--generate-missing` will propagate the effective RPM to each `analyze_disk` call for consistent normalization.
+
 ### analyze_disk
 ```
-python main.py analyze_disk <path-to-dir-or-raw> [--rpm 360] [--summarize] [--lm-host HOST:PORT] \
+python main.py analyze_disk <path-to-dir-or-raw> [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] [--lm-host HOST:PORT] \
   [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
-Saves `surface_map.json`, flux plots, the combined polar disk-surface (`<label>_surface_disk_surface.png`), and a single composite image (`<label>_composite_report.png`).
+Saves `surface_map.json`, flux plots, the combined polar disk‑surface (`<label>_surface_disk_surface.png`), per‑side high‑res surfaces (`<label>_surface_side0.png`, `..._side1.png`), Instability Map (`<label>_instability_map.png`), Instability CSV (`<label>_instability_summary.csv`), and a composite image (`<label>_composite_report.png`).
 
 ### analyze (single .raw)
 ```
@@ -81,7 +89,19 @@ Generates per-file flux plots and stats.
 
 ## Disk Surface Visualization
 
-Polar map shows average bits-per-revolution per track (radius = track index). Both sides are in one figure with the colorbar to the right. Output naming uses input-derived labels for clarity.
+Polar map shows average bits‑per‑revolution per track (radius = track index). Both sides are in one figure with the colorbar to the right. Output naming uses input‑derived labels for clarity.
+
+High‑fidelity rendering:
+- Combined polar and Instability maps are saved at high DPI with increased angular resolution and radial upsampling for smooth imagery.
+- Per‑side high‑res surfaces are provided to inspect each side independently while preserving a shared density scale.
+
+Instability and Structure:
+- For each track/side we compute `instability_score` (0‑1) and a simple `structure_score` (0‑1). These are saved into `surface_map.json` and summarized in `<label>_instability_summary.csv`.
+- The composite prefers the Instability Map panel; if unavailable, it falls back to the revolution heatmap.
+
+Single‑sided detection:
+- We detect likely single‑sided disks either by very low Side‑1 coverage or by near‑duplicate Side‑1 vs Side‑0 density radials.
+- When detected, the composite title includes “Single‑sided (S1 missing|duplicated)”, and `surface_map.json` records the reason and coverage metrics under `global.insights`.
 
 ## Notes
 
@@ -194,20 +214,15 @@ Polar map shows average bits-per-revolution per track (radius = track index). Bo
    - Use for full disk: Maps surface, identifies coercivity/protection variations for adaptive encoding (e.g., higher density on clean zones).
    - Note: For single-file focus with per-file viz, use 'analyze'. Binary files like test_data.bin are for encode/decode, not flux analysis.
 
-## Disk Surface Visualization
-The polar map shows average density per track, rendered radially (track 0 at center, higher tracks outward). Both sides are shown in one image. The colorbar is to the right and labeled “Bits per Revolution”.
-
-Tip: Use `--rpm 360` to normalize stats for 1.2MB 5.25" drives (typical 360 RPM). The tool also shows a simple HD/DD classification in the composite title based on average cell interval length.
-- **Round-trip:** Encode test_data.bin → test_encoded.raw, decode back; expect 100% match.
-- **Density:** At 2.0, ~8192 bits/rev vs. standard ~4000; decoder recovers data despite 5% noise.
-- **Disk Surface:** Run analyze_disk on blanks/protected dumps to explore; use map/heatmap for custom encoding placement; --summarize for insights.
-- **LLM Summary Behavior**:
-  - analyze_disk: strict JSON schema, low temperature recommended (0.0–0.2); deterministic fallback avoids hallucinations.
-  - analyze_corpus: strict JSON with `per_disk` details; deterministic fallback when no valid measurements.
+## Tips
+- Use `--rpm 360` (or `--profile 525HD`) to normalize stats for 1.2MB 5.25" drives; use `--rpm 300` (or `--profile 35HD/35DD`) for 3.5".
+- The composite title includes a simple HD/DD heuristic based on mean cell interval length.
+- Run `analyze_disk` on blanks vs formatted to compare surfaces; use Instability Map and per‑side images to guide placement.
+- LLM summaries use strict JSON schemas and deterministic fallbacks when no valid measurements are present.
 
 ## Next Steps
-- Integrate AI EC (phase 3): Train models on surface map for error prediction, puzzle-like patterns.
-- LLM Enhancements: Customize prompts or integrate more models via LM Studio; tune per-disk narrative schemas as needed.
-- See [`plan.md`](plan.md) for full roadmap.
+- Integrate AI EC (phase 3): Train models on surface map for error prediction, puzzle‑like patterns.
+- LLM Enhancements: Customize prompts or integrate more models via LM Studio; tune per‑disk narrative schemas as needed.
+- See [`docs/roadmap.md`](docs/roadmap.md) for the roadmap.
 
 For issues, ensure running from src/ or use `python -m FloppyAI.src.main` from FloppyAI/.
