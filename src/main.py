@@ -444,6 +444,58 @@ def analyze_corpus(args):
                 safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
                 plt.savefig(str(run_dir / f'corpus_tracks_side1_{safe_label}.png'), dpi=150)
                 plt.close()
+
+        # Surfaces montage across all disks (one image per disk)
+        try:
+            # Prefer images copied under run_dir/disks/<label>/<label>_disk_surface.png
+            surface_images = []
+            disks_dir = run_dir / 'disks'
+            if disks_dir.exists():
+                for d in sorted([p for p in disks_dir.iterdir() if p.is_dir()]):
+                    # Try canonical names first
+                    cand = None
+                    for pat in [f"{d.name}_disk_surface.png", f"{d.name}_surface_disk_surface.png"]:
+                        fp = d / pat
+                        if fp.exists():
+                            cand = fp
+                            break
+                    if cand is None:
+                        hits = list(d.glob("*_disk_surface.png")) or list(d.glob("*surface_disk_surface.png"))
+                        if hits:
+                            cand = hits[0]
+                    if cand is not None:
+                        surface_images.append((d.name, cand))
+            # Fallback: look near each input map
+            if not surface_images:
+                for mp, _ in corpus:
+                    pdir = Path(mp).parent
+                    hits = list(pdir.glob("*_disk_surface.png")) or list(pdir.glob("*surface_disk_surface.png"))
+                    if hits:
+                        surface_images.append((pdir.name, hits[0]))
+
+            if surface_images:
+                n = len(surface_images)
+                cols = min(5, max(2, int(np.ceil(np.sqrt(n)))))
+                rows = int(np.ceil(n / cols))
+                fig = plt.figure(figsize=(cols*4.0, rows*4.0))
+                for i, (lbl, ipath) in enumerate(surface_images, start=1):
+                    ax = fig.add_subplot(rows, cols, i)
+                    try:
+                        img = plt.imread(str(ipath))
+                        ax.imshow(img)
+                        ax.set_title(lbl, fontsize=9)
+                    except Exception as e:
+                        ax.text(0.5, 0.5, f"Failed: {Path(ipath).name}", ha='center', va='center')
+                    ax.axis('off')
+                plt.tight_layout()
+                grid_path = run_dir / 'corpus_surfaces_grid.png'
+                plt.savefig(str(grid_path), dpi=220)
+                plt.close()
+                print(f"Corpus surfaces montage saved to {grid_path}")
+            else:
+                print("No disk surface images found for montage; run analyze_corpus with --generate-missing or ensure per-disk outputs exist.")
+        except Exception as em:
+            print(f"Failed to build corpus surfaces montage: {em}")
     except Exception as e:
         print(f"Corpus visualization generation failed: {e}")
 
@@ -1100,6 +1152,54 @@ def analyze_disk(args):
                 print("Side density comparison saved to side_density_heatmap.png")
             else:
                 print("Skipping side heatmap: insufficient data on one or both sides")
+
+        # Single-sided detection (missing S1 or duplicated S0)
+        single_sided_reason = None
+        try:
+            Tdet = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
+        except Exception:
+            Tdet = 84
+        rad0 = np.zeros(Tdet); has0 = np.zeros(Tdet, dtype=bool)
+        rad1 = np.zeros(Tdet); has1 = np.zeros(Tdet, dtype=bool)
+        for tk in surface_map:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            # Side 0
+            dvals0 = [e.get('analysis', {}).get('density_estimate_bits_per_rev') for e in surface_map[tk].get(0, []) if isinstance(e, dict) and 'analysis' in e and isinstance(e.get('analysis', {}).get('density_estimate_bits_per_rev'), (int, float))]
+            if dvals0:
+                rad0[ti] = float(np.mean(dvals0))
+                has0[ti] = True
+            # Side 1
+            dvals1 = [e.get('analysis', {}).get('density_estimate_bits_per_rev') for e in surface_map[tk].get(1, []) if isinstance(e, dict) and 'analysis' in e and isinstance(e.get('analysis', {}).get('density_estimate_bits_per_rev'), (int, float))]
+            if dvals1:
+                rad1[ti] = float(np.mean(dvals1))
+                has1[ti] = True
+        c0 = int(has0.sum()); c1 = int(has1.sum())
+        cov_ratio = (c1 / c0) if c0 > 0 else 0.0
+        # Missing S1 if very low coverage on side 1 compared to side 0
+        if c0 >= 10 and cov_ratio < 0.05:
+            single_sided_reason = 'missing_s1'
+        else:
+            # Duplicated S0 if S1 matches S0 closely on overlapping tracks
+            inter = has0 & has1
+            if int(inter.sum()) >= 8:
+                X = rad0[inter]; Y = rad1[inter]
+                mn = float(min(np.min(X), np.min(Y)))
+                mx = float(max(np.max(X), np.max(Y)))
+                rng = mx - mn if mx > mn else 1.0
+                x = (X - mn) / rng
+                y = (Y - mn) / rng
+                # Cosine similarity
+                dot = float(np.dot(x, y))
+                nx = float(np.linalg.norm(x)); ny = float(np.linalg.norm(y))
+                cos_sim = dot / (nx * ny + 1e-9)
+                mad = float(np.mean(np.abs(x - y)))
+                if cos_sim > 0.995 and mad < 0.05:
+                    single_sided_reason = 'duplicated_s0'
         
         # Add global summary to surface_map
         surface_map['global'] = {
@@ -1114,7 +1214,12 @@ def analyze_disk(args):
             'protection_side_diff': float(side_diff),
             'insights': {
                 'likely_copy_protection_on_side': '1' if side1_protection > side0_protection + 0.1 else '0' if side0_protection > side1_protection + 0.1 else 'balanced',
-                'packing_potential': f"Up to {global_max_density} bits/rev feasible with variable cells; current avg {global_analysis.get('density_estimate_bits_per_rev', 0)}; try density>1.5 in encode for protection-like schemes"
+                'packing_potential': f"Up to {global_max_density} bits/rev feasible with variable cells; current avg {global_analysis.get('density_estimate_bits_per_rev', 0)}; try density>1.5 in encode for protection-like schemes",
+                'single_sided': bool(single_sided_reason is not None),
+                'single_sided_reason': single_sided_reason,
+                'side0_tracks_with_data': c0,
+                'side1_tracks_with_data': c1,
+                'coverage_ratio_s1_over_s0': cov_ratio
             }
         }
     else:
@@ -1228,6 +1333,32 @@ def analyze_disk(args):
         plt.savefig(str(outfile), dpi=220)
         plt.close()
         print(f"Disk surface saved to {outfile}")
+
+        # Also save individual high-res side images with shared scale for comparison
+        for side in [0, 1]:
+            fig = plt.figure(figsize=(7, 6))
+            from matplotlib.gridspec import GridSpec
+            gs = GridSpec(1, 2, width_ratios=[1, 0.05], figure=fig)
+            ax = fig.add_subplot(gs[0, 0], projection='polar')
+            cax = fig.add_subplot(gs[0, 1])
+            if masks[side].any():
+                Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
+                pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+                ax.set_ylim(0, T)
+                ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
+                ax.set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+                ax.set_title(f"Side {side}")
+                cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+                cbar.set_label('Bits per Revolution')
+            else:
+                ax.set_title(f"Side {side} (no data)")
+                ax.set_ylim(0, T)
+                ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+            plt.tight_layout()
+            out_single = Path(str(out_prefix) + f"_side{side}.png")
+            plt.savefig(str(out_single), dpi=240)
+            plt.close()
+            print(f"Disk surface (side {side}) saved to {out_single}")
 
     # Helper: render per-track instability map (both sides) with shared color scale
     def _render_instability_map(instab_scores: dict, T: int, out_prefix: Path):
@@ -1421,7 +1552,16 @@ def analyze_disk(args):
 
         # Build figure with up to 6 panels
         fig = plt.figure(figsize=(16, 12))
-        title_suffix = f"  •  {density_class}" if density_class else ""
+        title_parts = []
+        if density_class:
+            title_parts.append(density_class)
+        if 'single_sided_reason' in surface_map.get('global', {}).get('insights', {}) and surface_map['global']['insights']['single_sided_reason']:
+            reason = surface_map['global']['insights']['single_sided_reason']
+            if reason == 'missing_s1':
+                title_parts.append('Single-sided (S1 missing)')
+            elif reason == 'duplicated_s0':
+                title_parts.append('Single-sided (S1 duplicated)')
+        title_suffix = ("  •  " + "  •  ".join(title_parts)) if title_parts else ""
         fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
 
         def add_image_subplot(idx, path, title):
@@ -1468,9 +1608,14 @@ def analyze_disk(args):
             print(f"CSV export failed: {e_csv}")
         # Save classification tag to text for quick reference
         try:
-            if density_class:
+            if density_class or surface_map.get('global', {}).get('insights', {}).get('single_sided'):
                 with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
-                    cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+                    if density_class:
+                        cf.write(f"density_class={density_class}\n")
+                    cf.write(f"mean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+                    ss = surface_map.get('global', {}).get('insights', {}).get('single_sided_reason')
+                    if ss:
+                        cf.write(f"single_sided={True}\nreason={ss}\n")
         except Exception:
             pass
     except Exception as e:
