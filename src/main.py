@@ -92,6 +92,489 @@ def analyze_stream(args):
         return 1
     return 0
 
+def analyze_corpus(args):
+    """Aggregate multiple surface_map.json files to produce a corpus-level summary."""
+    run_dir = get_output_dir(args.output_dir)
+    inputs = []
+    base = Path(args.inputs)
+
+    # Optionally generate surface_map.json for directories containing .raw files
+    if getattr(args, 'generate_missing', False) and base.is_dir():
+        raw_dirs = {p.parent for p in base.rglob('*.raw')}
+        for d in sorted(raw_dirs):
+            try:
+                print(f"Generating surface map for {d} ...")
+                # Invoke analyze_disk programmatically
+                disk_args = argparse.Namespace(
+                    input=str(d), track=None, side=None, rpm=getattr(args, 'rpm', 360),
+                    lm_host=getattr(args, 'lm_host', 'localhost:1234'),
+                    lm_model=getattr(args, 'lm_model', 'local-model'),
+                    lm_temperature=getattr(args, 'lm_temperature', 0.2),
+                    summarize=getattr(args, 'summarize', False),
+                    output_dir=None, summary_format='json'
+                )
+                analyze_disk(disk_args)
+            except Exception as e:
+                print(f"Failed to analyze {d}: {e}")
+
+    if base.is_dir():
+        found = {p for p in base.rglob('surface_map.json')}
+        # Include newly generated runs under test_outputs as well
+        test_out = Path('test_outputs')
+        if test_out.exists():
+            found.update(test_out.rglob('surface_map.json'))
+        inputs = sorted(found)
+    elif base.name.endswith('.json'):
+        inputs = [base]
+    if not inputs:
+        print(f"No surface_map.json found under {args.inputs}")
+        return 1
+
+    corpus = []
+    for mp in inputs:
+        try:
+            with open(mp, 'r') as f:
+                sm = json.load(f)
+            corpus.append((mp, sm))
+            print(f"Loaded {mp}")
+        except Exception as e:
+            print(f"Failed to load {mp}: {e}")
+
+    per_disk = []
+    all_side0 = []
+    all_side1 = []
+    all_side0_var = []
+    all_side1_var = []
+    plot_side0_by_disk = []  # list of lists (densities)
+    plot_side1_by_disk = []
+    per_disk_tracks_side0 = []  # list of (label, [(track, dens)])
+    per_disk_tracks_side1 = []
+    disk_labels = []
+    def side_entries(track_obj, side_int):
+        """Return list for side key handling both int and string keys from JSON."""
+        if not isinstance(track_obj, dict):
+            return []
+        if side_int in track_obj:
+            return track_obj.get(side_int, [])
+        return track_obj.get(str(side_int), [])
+
+    for mp, sm in corpus:
+        s0 = []
+        s1 = []
+        v0 = []
+        v1 = []
+        per_disk_t0 = []
+        per_disk_t1 = []
+        for track in sm:
+            if track == 'global':
+                continue
+            for entry in side_entries(sm[track], 0):
+                if isinstance(entry, dict):
+                    d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                    var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(entry.get('analysis', {}), dict) else None
+                    if isinstance(d, (int, float)):
+                        s0.append(float(d))
+                        all_side0.append(float(d))
+                        try:
+                            per_disk_t0.append((int(track), float(d)))
+                        except Exception:
+                            pass
+                    if isinstance(var, (int, float)):
+                        v0.append(float(var))
+                        all_side0_var.append(float(var))
+            for entry in side_entries(sm[track], 1):
+                if isinstance(entry, dict):
+                    d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                    var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(entry.get('analysis', {}), dict) else None
+                    if isinstance(d, (int, float)):
+                        s1.append(float(d))
+                        all_side1.append(float(d))
+                        try:
+                            per_disk_t1.append((int(track), float(d)))
+                        except Exception:
+                            pass
+                    if isinstance(var, (int, float)):
+                        v1.append(float(var))
+                        all_side1_var.append(float(var))
+        plot_side0_by_disk.append(s0)
+        plot_side1_by_disk.append(s1)
+        disk_labels.append(Path(mp).parent.name)
+        per_disk_tracks_side0.append((disk_labels[-1], per_disk_t0))
+        per_disk_tracks_side1.append((disk_labels[-1], per_disk_t1))
+        disk_stats = {
+            'path': str(mp),
+            'label': Path(mp).parent.name,
+            'side0': {
+                'count': len(s0),
+                'min': float(np.min(s0)) if s0 else None,
+                'max': float(np.max(s0)) if s0 else None,
+                'avg': float(np.mean(s0)) if s0 else None,
+                'median': float(np.median(s0)) if s0 else None,
+                'avg_variance': float(np.mean(v0)) if v0 else None,
+            },
+            'side1': {
+                'count': len(s1),
+                'min': float(np.min(s1)) if s1 else None,
+                'max': float(np.max(s1)) if s1 else None,
+                'avg': float(np.mean(s1)) if s1 else None,
+                'median': float(np.median(s1)) if s1 else None,
+                'avg_variance': float(np.mean(v1)) if v1 else None,
+            }
+        }
+        per_disk.append(disk_stats)
+
+    corpus_summary = {
+        'num_disks': len(per_disk),
+        'side0': {
+            'count': len(all_side0),
+            'min': float(np.min(all_side0)) if all_side0 else None,
+            'max': float(np.max(all_side0)) if all_side0 else None,
+            'avg': float(np.mean(all_side0)) if all_side0 else None,
+            'median': float(np.median(all_side0)) if all_side0 else None,
+        },
+        'side1': {
+            'count': len(all_side1),
+            'min': float(np.min(all_side1)) if all_side1 else None,
+            'max': float(np.max(all_side1)) if all_side1 else None,
+            'avg': float(np.mean(all_side1)) if all_side1 else None,
+            'median': float(np.median(all_side1)) if all_side1 else None,
+        },
+        'per_disk': per_disk,
+    }
+
+    out_path = run_dir / 'corpus_summary.json'
+    with open(out_path, 'w') as f:
+        json.dump(corpus_summary, f, indent=2)
+    print(f"Corpus summary saved to {out_path}")
+
+    # Visualizations for corpus
+    try:
+        # Histograms of density per side
+        if all_side0:
+            plt.figure(figsize=(8,4))
+            plt.hist(all_side0, bins=40, color='steelblue', alpha=0.8)
+            plt.title('Density Distribution - Side 0 (all disks)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Count')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side0_density_hist.png'), dpi=150)
+            plt.close()
+        if all_side1:
+            plt.figure(figsize=(8,4))
+            plt.hist(all_side1, bins=40, color='indianred', alpha=0.8)
+            plt.title('Density Distribution - Side 1 (all disks)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Count')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side1_density_hist.png'), dpi=150)
+            plt.close()
+
+        # Boxplots of density by disk for each side
+        if any(len(x) for x in plot_side0_by_disk):
+            plt.figure(figsize=(max(8, len(plot_side0_by_disk)*0.6), 5))
+            plt.boxplot([x if x else [np.nan] for x in plot_side0_by_disk], showfliers=False)
+            plt.title('Density by Disk - Side 0')
+            plt.xlabel('Disk')
+            plt.ylabel('Bits per Revolution')
+            plt.xticks(range(1, len(disk_labels)+1), disk_labels, rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side0_density_boxplot.png'), dpi=150)
+            plt.close()
+        if any(len(x) for x in plot_side1_by_disk):
+            plt.figure(figsize=(max(8, len(plot_side1_by_disk)*0.6), 5))
+            plt.boxplot([x if x else [np.nan] for x in plot_side1_by_disk], showfliers=False)
+            plt.title('Density by Disk - Side 1')
+            plt.xlabel('Disk')
+            plt.ylabel('Bits per Revolution')
+            plt.xticks(range(1, len(disk_labels)+1), disk_labels, rotation=45, ha='right')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side1_density_boxplot.png'), dpi=150)
+            plt.close()
+
+        # Scatter of density vs variance across all entries per side (if variance available)
+        if all_side0 and all_side0_var:
+            plt.figure(figsize=(6,5))
+            plt.scatter(all_side0, all_side0_var, s=8, alpha=0.5, color='steelblue')
+            plt.title('Side 0: Density vs Avg Variance (all entries)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Avg Variance')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side0_density_vs_variance.png'), dpi=150)
+            plt.close()
+        if all_side1 and all_side1_var:
+            plt.figure(figsize=(6,5))
+            plt.scatter(all_side1, all_side1_var, s=8, alpha=0.5, color='indianred')
+            plt.title('Side 1: Density vs Avg Variance (all entries)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Avg Variance')
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side1_density_vs_variance.png'), dpi=150)
+            plt.close()
+        print("Corpus visualizations saved (histograms, boxplots, scatter plots)")
+        # Overlay density curves per disk (approximate via normalized histograms)
+        if any(len(x) for x in plot_side0_by_disk):
+            plt.figure(figsize=(9,5))
+            for dens, label in zip(plot_side0_by_disk, disk_labels):
+                if not dens:
+                    continue
+                counts, bins = np.histogram(dens, bins=min(40, max(10, int(len(dens)/5))), density=True)
+                centers = (bins[1:] + bins[:-1]) / 2.0
+                # simple smoothing
+                if len(counts) > 3:
+                    kernel = np.ones(3)/3
+                    counts = np.convolve(counts, kernel, mode='same')
+                plt.plot(centers, counts, alpha=0.6, label=label)
+            plt.title('Side 0 Density Overlays by Disk (normalized)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Normalized Density')
+            plt.legend(fontsize=8, ncol=2)
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side0_density_overlays.png'), dpi=150)
+            plt.close()
+        if any(len(x) for x in plot_side1_by_disk):
+            plt.figure(figsize=(9,5))
+            for dens, label in zip(plot_side1_by_disk, disk_labels):
+                if not dens:
+                    continue
+                counts, bins = np.histogram(dens, bins=min(40, max(10, int(len(dens)/5))), density=True)
+                centers = (bins[1:] + bins[:-1]) / 2.0
+                if len(counts) > 3:
+                    kernel = np.ones(3)/3
+                    counts = np.convolve(counts, kernel, mode='same')
+                plt.plot(centers, counts, alpha=0.6, label=label)
+            plt.title('Side 1 Density Overlays by Disk (normalized)')
+            plt.xlabel('Bits per Revolution')
+            plt.ylabel('Normalized Density')
+            plt.legend(fontsize=8, ncol=2)
+            plt.tight_layout()
+            plt.savefig(str(run_dir / 'corpus_side1_density_overlays.png'), dpi=150)
+            plt.close()
+
+        # Per-disk track vs density scatter saved in corpus folder
+        for label, tracks in per_disk_tracks_side0:
+            if tracks:
+                xs, ys = zip(*sorted(tracks, key=lambda t: t[0]))
+                plt.figure(figsize=(7,4))
+                plt.scatter(xs, ys, s=10, alpha=0.7, color='steelblue')
+                plt.title(f'{label} - Side 0: Track vs Density')
+                plt.xlabel('Track Index')
+                plt.ylabel('Bits per Revolution')
+                plt.tight_layout()
+                safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+                plt.savefig(str(run_dir / f'corpus_tracks_side0_{safe_label}.png'), dpi=150)
+                plt.close()
+        for label, tracks in per_disk_tracks_side1:
+            if tracks:
+                xs, ys = zip(*sorted(tracks, key=lambda t: t[0]))
+                plt.figure(figsize=(7,4))
+                plt.scatter(xs, ys, s=10, alpha=0.7, color='indianred')
+                plt.title(f'{label} - Side 1: Track vs Density')
+                plt.xlabel('Track Index')
+                plt.ylabel('Bits per Revolution')
+                plt.tight_layout()
+                safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+                plt.savefig(str(run_dir / f'corpus_tracks_side1_{safe_label}.png'), dpi=150)
+                plt.close()
+    except Exception as e:
+        print(f"Corpus visualization generation failed: {e}")
+
+    # Optional LLM corpus summary
+    if getattr(args, 'summarize', False):
+        try:
+            host_port = args.lm_host if ':' in args.lm_host else f"{args.lm_host}:1234"
+            client = openai.OpenAI(
+                base_url=f"http://{host_port}/v1",
+                api_key="lm-studio"
+            )
+            summary_data = {
+                'num_disks': corpus_summary.get('num_disks', 0),
+                'side0': corpus_summary.get('side0', {}),
+                'side1': corpus_summary.get('side1', {}),
+                'per_disk': [
+                    {
+                        'label': d.get('label'),
+                        'side0': {
+                            'count': d['side0'].get('count'),
+                            'avg': d['side0'].get('avg'),
+                            'median': d['side0'].get('median')
+                        },
+                        'side1': {
+                            'count': d['side1'].get('count'),
+                            'avg': d['side1'].get('avg'),
+                            'median': d['side1'].get('median')
+                        }
+                    } for d in corpus_summary.get('per_disk', [])
+                ]
+            }
+
+            # If no measurements at all, write deterministic minimal narrative and skip model
+            if (summary_data['side0'].get('count') in [0, None]) and (summary_data['side1'].get('count') in [0, None]):
+                parsed = {
+                    'counts': {'num_disks': summary_data['num_disks']},
+                    'side0': summary_data['side0'],
+                    'side1': summary_data['side1'],
+                    'narrative': 'No valid density measurements found across the provided disks. Verify inputs contain surface_map.json with analysis.density_estimate_bits_per_rev populated.'
+                }
+                llm_json = run_dir / 'llm_corpus_summary.json'
+                with open(llm_json, 'w') as jf:
+                    json.dump(parsed, jf, indent=2)
+                llm_txt = run_dir / 'llm_corpus_summary.txt'
+                with open(llm_txt, 'w') as tf:
+                    tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
+                    tf.write(parsed.get('narrative', ''))
+                print(f"LLM corpus summary saved to {llm_txt} and {llm_json}")
+                return 0
+
+            schema_description = (
+                "Respond ONLY with a JSON object matching this schema: {\n"
+                "  counts: { num_disks: number },\n"
+                "  side0: { count:number, min:number|null, max:number|null, avg:number|null, median:number|null },\n"
+                "  side1: { count:number, min:number|null, max:number|null, avg:number|null, median:number|null },\n"
+                "  per_disk: [{ label:string, side0:{count:number, avg:number|null, median:number|null}, side1:{count:number, avg:number|null, median:number|null} }],\n"
+                "  narrative: string\n"
+                "}. The 'narrative' must reference ONLY the fields above and avoid domain terms not present in the data. No extra keys, no text outside JSON."
+            )
+
+            system_msg = (
+                "You are an expert in floppy disk magnetic flux analysis."
+                " Output strictly valid JSON per the given schema."
+                " Do NOT include any extra text, code fences, explanations, or hidden reasoning."
+            )
+
+            payload = {
+                'counts': {'num_disks': summary_data['num_disks']},
+                'side0': summary_data['side0'],
+                'side1': summary_data['side1'],
+                'per_disk': summary_data['per_disk'],
+            }
+            user_prompt = (
+                "JSON schema requirements:\n" + schema_description + "\n\n"
+                "Data:\n" + json.dumps(payload, indent=2)
+            )
+
+            def try_parse_json(text: str):
+                s = text.strip()
+                if s.startswith('```'):
+                    s = s.strip('`')
+                    i = s.find('{')
+                    if i != -1:
+                        s = s[i:]
+                i = s.find('{')
+                if i > 0:
+                    s = s[i:]
+                return json.loads(s)
+
+            response = client.chat.completions.create(
+                model=args.lm_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=400,
+                temperature=getattr(args, 'lm_temperature', 0.2),
+            )
+            content = response.choices[0].message.content or ""
+            parsed = None
+            try:
+                parsed = try_parse_json(content)
+            except Exception:
+                retry_prompt = (
+                    "Return ONLY valid JSON per the schema with no extra text. Do not use code fences.\n\n"
+                    "Schema:\n" + schema_description + "\n\nData:\n" + json.dumps(payload, indent=2)
+                )
+                response2 = client.chat.completions.create(
+                    model=args.lm_model,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": retry_prompt},
+                    ],
+                    max_tokens=400,
+                    temperature=getattr(args, 'lm_temperature', 0.2),
+                )
+                content2 = response2.choices[0].message.content or ""
+                try:
+                    parsed = try_parse_json(content2)
+                except Exception:
+                    parsed = None
+
+            if parsed is None:
+                parsed = {
+                    'counts': {'num_disks': summary_data['num_disks']},
+                    'side0': summary_data['side0'],
+                    'side1': summary_data['side1'],
+                    'per_disk': summary_data['per_disk'],
+                    'narrative': (
+                        "Deterministic corpus summary: {n} disk(s) analyzed. "
+                        "Side0 avg {s0a}, median {s0m}; Side1 avg {s1a}, median {s1m}. "
+                        "Per-disk medians: " + ", ".join([
+                            f"{d['label']}: S0 {d['side0'].get('median')} | S1 {d['side1'].get('median')}" for d in summary_data['per_disk']
+                        ])
+                    ).format(
+                        n=summary_data['num_disks'],
+                        s0a=summary_data['side0'].get('avg'),
+                        s0m=summary_data['side0'].get('median'),
+                        s1a=summary_data['side1'].get('avg'),
+                        s1m=summary_data['side1'].get('median'),
+                    )
+                }
+
+            llm_json = run_dir / 'llm_corpus_summary.json'
+            with open(llm_json, 'w') as jf:
+                json.dump(parsed, jf, indent=2)
+            llm_txt = run_dir / 'llm_corpus_summary.txt'
+            with open(llm_txt, 'w') as tf:
+                tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
+                tf.write(parsed.get('narrative', ''))
+            print(f"LLM corpus summary saved to {llm_txt} and {llm_json}")
+        except Exception as e:
+            print(f"LLM corpus summary failed: {e}")
+            print("Skipping corpus summary generation.")
+    return 0
+
+def classify_surface(args):
+    """Classify blank-like vs written-like per track/side using a simple density threshold."""
+    run_dir = get_output_dir(args.output_dir)
+    with open(args.input, 'r') as f:
+        sm = json.load(f)
+    threshold = args.blank_density_thresh
+    results = {}
+    def side_entries(track_obj, side_int):
+        if not isinstance(track_obj, dict):
+            return []
+        if side_int in track_obj:
+            return track_obj.get(side_int, [])
+        return track_obj.get(str(side_int), [])
+
+    for track in sm:
+        if track == 'global':
+            continue
+        results[track] = {}
+        for side in [0, 1]:
+            labels = []
+            for entry in side_entries(sm.get(track, {}), side):
+                if not isinstance(entry, dict):
+                    continue
+                dens = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if 'analysis' in entry else None
+                label = 'blank_like' if isinstance(dens, (int, float)) and dens < threshold else 'written_like'
+                labels.append({
+                    'file': entry.get('file'),
+                    'density_estimate_bits_per_rev': dens,
+                    'avg_variance': var,
+                    'label': label
+                })
+            results[track][side] = labels
+    out = {
+        'input': args.input,
+        'blank_density_thresh': threshold,
+        'classification': results,
+    }
+    out_path = run_dir / 'classification.json'
+    with open(out_path, 'w') as f:
+        json.dump(out, f, indent=2)
+    print(f"Classification saved to {out_path}")
+    return 0
+
 def read_track(args):
     """Read a track from hardware."""
     run_dir = get_output_dir(args.output_dir)
@@ -257,7 +740,7 @@ def analyze_disk(args):
     raw_files = []
     if Path(input_path).is_file():
         filename = Path(input_path).name
-        if re.search(r'(\d+)\.(\d+)\.raw$', filename):
+        if re.search(r'(\d+)\.(\d)\.raw$', filename):
             parent_dir = Path(input_path).parent
             other_raws = list(parent_dir.glob("*.raw"))
             if len(other_raws) > 1:
@@ -270,13 +753,13 @@ def analyze_disk(args):
             raw_files = [str(input_path)]
     else:
         raw_files = [str(p) for p in Path(input_path).glob("*.raw")]
-    
+
     if not raw_files:
         print(f"No .raw files found in {input_path}")
         return 1
-    
+
     print(f"Analyzing {len(raw_files)} stream file(s) from {input_path}...")
-    
+
     # Collect valid files with metadata for sorting
     file_metadata = []
     for raw_path in raw_files:
@@ -502,11 +985,151 @@ def analyze_disk(args):
     else:
         print("No flux data overall")
     
+    # Helper: render disk surface polar plots per side
+    def _render_disk_surface(sm: dict, out_prefix: Path):
+        def side_entries(track_obj, side_int):
+            if not isinstance(track_obj, dict):
+                return []
+            if side_int in track_obj:
+                return track_obj.get(side_int, [])
+            return track_obj.get(str(side_int), [])
+        max_track = max([int(k) for k in sm.keys() if k != 'global'], default=83)
+        T = max(max_track+1, 1)
+        # Build per-side radial arrays of average density
+        radials = {}
+        masks = {}
+        for side in [0, 1]:
+            radial = np.zeros(T)
+            has = np.zeros(T, dtype=bool)
+            for tk in sm:
+                if tk == 'global':
+                    continue
+                try:
+                    ti = int(tk)
+                except Exception:
+                    continue
+                dens_vals = []
+                for entry in side_entries(sm[tk], side):
+                    if isinstance(entry, dict):
+                        d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                        if isinstance(d, (int, float)):
+                            dens_vals.append(float(d))
+                if dens_vals:
+                    radial[ti] = float(np.mean(dens_vals))
+                    has[ti] = True
+            radials[side] = radial
+            masks[side] = has
+        if not (masks[0].any() or masks[1].any()):
+            return
+        theta = np.linspace(0, 2*np.pi, 360)
+        r = np.arange(T)
+        R, TH = np.meshgrid(r, theta, indexing='ij')
+        fig, axs = plt.subplots(1, 2, subplot_kw={'projection': 'polar'}, figsize=(11,5))
+        pcm = None
+        for idx, side in enumerate([0, 1]):
+            radial = radials[side]
+            has = masks[side]
+            if has.any():
+                vmin = np.percentile(radial[has], 5)
+                vmax = np.percentile(radial[has], 95)
+                vmax = vmax if vmax > vmin else vmin + 1.0
+                Z = np.repeat(radial[:, None], theta.shape[0], axis=1)
+                pcm = axs[idx].pcolormesh(TH.T, R.T, Z.T, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+                axs[idx].set_ylim(0, T)
+                axs[idx].set_yticks([0, T//4, T//2, 3*T//4, T-1])
+                axs[idx].set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+                axs[idx].set_title(f"Side {side}")
+            else:
+                axs[idx].set_title(f"Side {side} (no data)")
+                axs[idx].set_ylim(0, T)
+        if pcm is not None:
+            cbar = fig.colorbar(pcm, ax=axs.ravel().tolist(), pad=0.08)
+            cbar.set_label('Bits per Revolution')
+        plt.tight_layout()
+        plt.savefig(str(out_prefix) + "_disk_surface.png", dpi=150)
+        plt.close()
+
     # Save map
     map_path = run_dir / "surface_map.json"
     with open(map_path, 'w') as f:
         json.dump(surface_map, f, indent=2, default=str)
     print(f"Surface map saved to {map_path}")
+    # Render disk-surface plots
+    try:
+        # Derive a human-friendly label from input path (file stem or directory name)
+        try:
+            in_path = Path(args.input)
+            label = in_path.stem if in_path.is_file() else in_path.name
+        except Exception:
+            label = 'disk'
+        safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+        _render_disk_surface(surface_map, run_dir / Path(f'{safe_label}_surface'))
+        print("Disk surface plot saved (<label>_surface_disk_surface.png)")
+                return track_obj.get(side_int, [])
+            return track_obj.get(str(side_int), [])
+        T = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
+        dens0 = np.full(T, np.nan)
+        dens1 = np.full(T, np.nan)
+        var0 = np.full(T, np.nan)
+        var1 = np.full(T, np.nan)
+        for tk in surface_map:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            dvals0, dvals1, vvals0, vvals1 = [], [], [], []
+            for e in side_entries(surface_map[tk], 0):
+                if isinstance(e, dict):
+                    d = e.get('analysis', {}).get('density_estimate_bits_per_rev')
+                    v = e.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(e.get('analysis', {}), dict) else None
+                    if isinstance(d, (int, float)): dvals0.append(float(d))
+                    if isinstance(v, (int, float)): vvals0.append(float(v))
+            for e in side_entries(surface_map[tk], 1):
+                if isinstance(e, dict):
+                    d = e.get('analysis', {}).get('density_estimate_bits_per_rev')
+                    v = e.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(e.get('analysis', {}), dict) else None
+                    if isinstance(d, (int, float)): dvals1.append(float(d))
+                    if isinstance(v, (int, float)): vvals1.append(float(v))
+            if dvals0: dens0[ti] = np.mean(dvals0)
+            if dvals1: dens1[ti] = np.mean(dvals1)
+            if vvals0: var0[ti] = np.mean(vvals0)
+            if vvals1: var1[ti] = np.mean(vvals1)
+
+        tracks = np.arange(T)
+        # Density by track (both sides)
+        plt.figure(figsize=(10,4))
+        if np.isfinite(dens0).any():
+            plt.plot(tracks, dens0, label='Side 0', color='steelblue')
+        if np.isfinite(dens1).any():
+            plt.plot(tracks, dens1, label='Side 1', color='indianred')
+        plt.title(f'{label}: Density by Track')
+        plt.xlabel('Track')
+        plt.ylabel('Bits per Revolution')
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(str(run_dir / f'{safe_label}_density_by_track.png'), dpi=150)
+        plt.close()
+
+        # Variance by track (both sides)
+        if np.isfinite(var0).any() or np.isfinite(var1).any():
+            plt.figure(figsize=(10,4))
+            if np.isfinite(var0).any():
+                plt.plot(tracks, var0, label='Side 0', color='steelblue')
+            if np.isfinite(var1).any():
+                plt.plot(tracks, var1, label='Side 1', color='indianred')
+            plt.title(f'{label}: Noise Variance by Track')
+            plt.xlabel('Track')
+            plt.ylabel('Avg Variance')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(str(run_dir / f'{safe_label}_variance_by_track.png'), dpi=150)
+            plt.close()
+
+        # Keep outputs simple: removed top/bottom per-track bar charts
+    except Exception as e:
+        print(f"Disk surface plot failed: {e}")
     total_tracks = len(surface_map) - 1  # exclude global
     total_entries = sum(len(sides) for sides in surface_map.values()) - 1
     global_insights = surface_map['global'].get('insights', {})
@@ -794,6 +1417,71 @@ def analyze_disk(args):
 
     return 0
 
+def plan_pool(args):
+    """Select top-quality zones to form a dense bit pool based on density and noise."""
+    run_dir = get_output_dir(args.output_dir)
+    with open(args.input, 'r') as f:
+        sm = json.load(f)
+    min_density = args.min_density
+    top_percent = args.top_percent
+
+    candidates = {0: [], 1: []}  # (track, density, variance)
+    def side_entries(track_obj, side_int):
+        if not isinstance(track_obj, dict):
+            return []
+        if side_int in track_obj:
+            return track_obj.get(side_int, [])
+        return track_obj.get(str(side_int), [])
+
+    for track in sm:
+        if track == 'global':
+            continue
+        t_int = int(track)
+        for side in [0, 1]:
+            for entry in side_entries(sm.get(track, {}), side):
+                if not isinstance(entry, dict):
+                    continue
+                dens = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if 'analysis' in entry else None
+                if isinstance(dens, (int, float)) and dens >= min_density:
+                    candidates[side].append((t_int, float(dens), float(var) if isinstance(var, (int, float)) else None))
+
+    def pick_pool(items):
+        if not items:
+            return []
+        # Rank primarily by density desc, secondarily by variance asc when available
+        def key_fn(x):
+            _, d, v = x
+            return (-d, float('inf') if v is None else v)
+        items_sorted = sorted(items, key=key_fn)
+        k = max(1, int(len(items_sorted) * top_percent))
+        return items_sorted[:k]
+
+    pool0 = pick_pool(candidates[0])
+    pool1 = pick_pool(candidates[1])
+
+    plan = {
+        'input': args.input,
+        'criteria': {
+            'min_density': min_density,
+            'top_percent': top_percent,
+        },
+        'selected': {
+            '0': [{'track': t, 'density': d, 'avg_variance': v} for t, d, v in pool0],
+            '1': [{'track': t, 'density': d, 'avg_variance': v} for t, d, v in pool1],
+        },
+        'summary': {
+            'side0_selected': len(pool0),
+            'side1_selected': len(pool1),
+        }
+    }
+
+    out_path = run_dir / 'pool_plan.json'
+    with open(out_path, 'w') as f:
+        json.dump(plan, f, indent=2)
+    print(f"Pool plan saved to {out_path}")
+    return 0
+
 def main():
     parser = argparse.ArgumentParser(
         description="FloppyAI: Flux Stream Analysis and Custom Encoding Tool"
@@ -863,6 +1551,33 @@ def main():
     analyze_disk_parser.add_argument("--summary-format", choices=["json", "text"], default="json", dest="summary_format", help="Summary output format: 'json' also writes llm_summary.json and renders narrative to txt (default), 'text' writes only txt")
     analyze_disk_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     analyze_disk_parser.set_defaults(func=analyze_disk)
+
+    # Analyze Corpus command
+    corpus_parser = subparsers.add_parser("analyze_corpus", help="Aggregate multiple surface_map.json files for a corpus summary")
+    corpus_parser.add_argument("inputs", help="Directory containing runs (searched recursively for surface_map.json) or a single surface_map.json path")
+    corpus_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Scan for .raw under inputs, generate surface_map.json via analyze_disk where missing before aggregating")
+    corpus_parser.add_argument("--rpm", type=int, default=360, help="Known RPM for normalization when generating missing maps (default: 360)")
+    corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
+    corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
+    corpus_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
+    corpus_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM corpus summary generation (default: 0.2)")
+    corpus_parser.set_defaults(func=analyze_corpus)
+
+    # Classify Surface command
+    classify_parser = subparsers.add_parser("classify_surface", help="Classify blank-like vs written-like for a surface_map.json")
+    classify_parser.add_argument("input", help="Path to surface_map.json")
+    classify_parser.add_argument("--blank-density-thresh", type=float, default=1000.0, dest="blank_density_thresh", help="Density threshold below which an entry is considered blank-like (default: 1000)")
+    classify_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    classify_parser.set_defaults(func=classify_surface)
+
+    # Plan Pool command
+    pool_parser = subparsers.add_parser("plan_pool", help="Select top-quality tracks to form a dense bit pool")
+    pool_parser.add_argument("input", help="Path to surface_map.json")
+    pool_parser.add_argument("--min-density", type=float, default=2000.0, dest="min_density", help="Minimum density (bits/rev) for candidate selection (default: 2000)")
+    pool_parser.add_argument("--top-percent", type=float, default=0.2, dest="top_percent", help="Top percentile of candidates to keep (0-1, default: 0.2)")
+    pool_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    pool_parser.set_defaults(func=plan_pool)
     
     args = parser.parse_args()
     if not args.command:

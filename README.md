@@ -1,9 +1,28 @@
+8. **Analyze Corpus** (Aggregate multiple surface_map.json files; generate visuals & LLM corpus summary):
+   ```
+   python main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm 360] [--summarize] [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
+   ```
+   - Use `--generate-missing` to scan for `.raw` files under the input root and auto-run `analyze_disk` (with `--rpm` and optional `--summarize`).
+   - Aggregates per-disk stats and saves:
+     - `corpus_summary.json` (per-side global stats and per-disk entries)
+     - Corpus plots:
+       - `corpus_side0_density_hist.png`, `corpus_side1_density_hist.png`
+       - `corpus_side0_density_boxplot.png`, `corpus_side1_density_boxplot.png`
+       - `corpus_side0_density_vs_variance.png`, `corpus_side1_density_vs_variance.png`
+       - `corpus_side0_density_overlays.png`, `corpus_side1_density_overlays.png`
+     - Organized per-disk folder outputs under `test_outputs/<timestamp>/disks/<disk-label>/`:
+       - `<disk-label>_disk_surface.png` (polar heatmap with both sides)
+   - LLM corpus summary:
+     - `llm_corpus_summary.json` and `.txt` with strict JSON, including `per_disk` details (label, counts, averages, medians).
+   - Example:
+     - `python main.py analyze_corpus ..\stream_dumps --generate-missing --rpm 360 --summarize --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0`
+
 # FloppyAI: Advanced Flux Analysis and Encoding Tool
 
 ## Overview
 FloppyAI is a Python-based tool for interfacing with KryoFlux DTC CLI to read/write flux streams (.raw files), analyze magnetic media characteristics (noise, anomalies on blanks), and prototype custom flux encoding for higher data density. It builds on the existing src/ for flux handling and extends it for AI-enhanced error correction.
 
-Recent enhancements include RPM normalization for accurate density estimates, copy protection detection via protection_scores and anomalies, surface modeling with side-specific heatmaps, and local LLM integration for human-readable summaries.
+Recent enhancements include RPM normalization for accurate density estimates, copy protection detection via protection_scores and anomalies, surface modeling with side-specific heatmaps, polar disk-surface visualizations, corpus-level analytics/plots, and local LLM integration for strict JSON summaries with per-disk details.
 
 ## Installation
 1. Ensure Python 3.8+ and pip.
@@ -22,7 +41,7 @@ Recent enhancements include RPM normalization for accurate density estimates, co
    - **Llama 3 8B Instruct**: Reliable but may occasionally show reasoning
    - **Mistral 7B Instruct**: Efficient but test for clean output
 
-   The system prompt explicitly instructs models to avoid thinking tags and provide only final professional summaries. For best results, test models to ensure they follow the "output only final analysis" instruction.
+   The system prompt explicitly instructs models to avoid thinking tags and provide only final professional summaries. The tool uses strict JSON schemas and deterministic fallbacks for reliability. For best results, use coder/instruct models that follow JSON directions closely.
 
 ## Usage
 Run from FloppyAI/ directory or src/ subdirectory:
@@ -32,7 +51,7 @@ python main.py --help
 ```
 Global options (place before subcommand): --lm-host IP (default: localhost, port fixed to 1234), --lm-model MODEL (default: local-model, name of loaded model in LM Studio).
 LLM summary options (for analyze_disk): --lm-temperature FLOAT (default 0.2), --summary-format json|text (default json).
-Example: python main.py --lm-host 192.168.1.131 --lm-model qwen2-coder-instruct analyze_disk [path] --summarize --lm-temperature 0.2 --summary-format json
+Example: `python main.py --lm-host 192.168.1.131 --lm-model qwen2-coder-instruct analyze_disk [path] --summarize --lm-temperature 0.2 --summary-format json`
 
 Note: Commands like analyze_disk do not take positional file arguments; use specific subcommands for single files.
 
@@ -127,6 +146,11 @@ Note: Commands like analyze_disk do not take positional file arguments; use spec
      - `--lm-temperature 0.2` recommended for accurate numeric reporting.
      - `--summary-format json|text` controls whether to write JSON plus text (json, default) or only text (text).
      - Works best with coder/instruct models like Qwen2-Coder Instruct.
+   - Additional image outputs per run:
+     - `<label>_surface_disk_surface.png` (polar heatmap; both sides combined as separate panels)
+     - `<label>_density_by_track.png` (line plot, side 0/1)
+     - `<label>_variance_by_track.png` (line plot, side 0/1)
+     - Note: `<label>` is derived from the input path (file stem or directory name), not the output folder name.
    - Examples:
      - Default batch: `python main.py analyze_disk` (processes example_stream_data/)
      - Full disk dir: `python main.py analyze_disk ..\stream_dumps\GoofyExpress\goofy_express\kryoflux_stream`
@@ -140,11 +164,13 @@ Note: Commands like analyze_disk do not take positional file arguments; use spec
 - **Round-trip:** Encode test_data.bin → test_encoded.raw, decode back; expect 100% match.
 - **Density:** At 2.0, ~8192 bits/rev vs. standard ~4000; decoder recovers data despite 5% noise.
 - **Disk Surface:** Run analyze_disk on blanks/protected dumps to explore; use map/heatmap for custom encoding placement; --summarize for insights.
-- **LLM Summary Example**: With LM Studio running, --summarize produces reports like "Deductions: Side 1 protected... Packing: Try density>1.5 for 700 bits/rev".
+- **LLM Summary Behavior**:
+  - analyze_disk: strict JSON schema, low temperature recommended (0.0–0.2); deterministic fallback avoids hallucinations.
+  - analyze_corpus: strict JSON with `per_disk` details; deterministic fallback when no valid measurements.
 
 ## Next Steps
 - Integrate AI EC (phase 3): Train models on surface map for error prediction, puzzle-like patterns.
-- LLM Enhancements: Customize prompts or integrate more models via LM Studio.
+- LLM Enhancements: Customize prompts or integrate more models via LM Studio; tune per-disk narrative schemas as needed.
 - See [`plan.md`](plan.md) for full roadmap.
 
 For issues, ensure running from src/ or use `python -m FloppyAI.src.main` from FloppyAI/.
