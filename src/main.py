@@ -27,13 +27,22 @@ import json
 import openai
 
 def get_output_dir(output_dir=None):
-    """Get or create timestamped output directory."""
-    base_dir = Path("test_outputs") if output_dir is None else Path(output_dir)
-    base_dir.mkdir(exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = base_dir / timestamp
-    run_dir.mkdir(exist_ok=True)
-    return run_dir
+    """Resolve output directory.
+
+    - If output_dir is None: create test_outputs/<timestamp>/
+    - If output_dir is provided: use it directly (no timestamp subfolder)
+    """
+    if output_dir is None:
+        base_dir = Path("test_outputs")
+        base_dir.mkdir(exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir = base_dir / timestamp
+        run_dir.mkdir(exist_ok=True)
+        return run_dir
+    else:
+        run_dir = Path(output_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
 
 def log_output(func):
     """Decorator to log console output to file."""
@@ -104,16 +113,38 @@ def analyze_corpus(args):
         for d in sorted(raw_dirs):
             try:
                 print(f"Generating surface map for {d} ...")
-                # Invoke analyze_disk programmatically
+                label = Path(d).name
+                safe = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+                disk_dir = (run_dir / 'disks' / safe)
+                disk_dir.mkdir(parents=True, exist_ok=True)
+                # Invoke analyze_disk programmatically, directing outputs to disk_dir
                 disk_args = argparse.Namespace(
                     input=str(d), track=None, side=None, rpm=getattr(args, 'rpm', 360),
                     lm_host=getattr(args, 'lm_host', 'localhost:1234'),
                     lm_model=getattr(args, 'lm_model', 'local-model'),
                     lm_temperature=getattr(args, 'lm_temperature', 0.2),
                     summarize=getattr(args, 'summarize', False),
-                    output_dir=None, summary_format='json'
+                    output_dir=str(disk_dir), summary_format='json'
                 )
                 analyze_disk(disk_args)
+                # Copy/rename composite to a concise name per disk
+                comp_src = disk_dir / f"{safe}_composite_report.png"
+                comp_dst = disk_dir / f"{safe}_composite.png"
+                if comp_src.exists():
+                    try:
+                        import shutil
+                        shutil.copyfile(str(comp_src), str(comp_dst))
+                    except Exception as e:
+                        print(f"Warning: failed to copy composite for {label}: {e}")
+                # Copy/rename polar disk-surface image
+                polar_src = disk_dir / f"{safe}_surface_disk_surface.png"
+                polar_dst = disk_dir / f"{safe}_disk_surface.png"
+                if polar_src.exists():
+                    try:
+                        import shutil
+                        shutil.copyfile(str(polar_src), str(polar_dst))
+                    except Exception as e:
+                        print(f"Warning: failed to copy polar surface for {label}: {e}")
             except Exception as e:
                 print(f"Failed to analyze {d}: {e}")
 
@@ -147,6 +178,8 @@ def analyze_corpus(args):
     all_side1_var = []
     plot_side0_by_disk = []  # list of lists (densities)
     plot_side1_by_disk = []
+    labels_side0 = []  # legend labels derived from stream filenames
+    labels_side1 = []
     per_disk_tracks_side0 = []  # list of (label, [(track, dens)])
     per_disk_tracks_side1 = []
     disk_labels = []
@@ -165,6 +198,8 @@ def analyze_corpus(args):
         v1 = []
         per_disk_t0 = []
         per_disk_t1 = []
+        rep_file_s0 = None
+        rep_file_s1 = None
         for track in sm:
             if track == 'global':
                 continue
@@ -172,6 +207,8 @@ def analyze_corpus(args):
                 if isinstance(entry, dict):
                     d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
                     var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(entry.get('analysis', {}), dict) else None
+                    if rep_file_s0 is None:
+                        rep_file_s0 = entry.get('file')
                     if isinstance(d, (int, float)):
                         s0.append(float(d))
                         all_side0.append(float(d))
@@ -186,6 +223,8 @@ def analyze_corpus(args):
                 if isinstance(entry, dict):
                     d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
                     var = entry.get('analysis', {}).get('noise_profile', {}).get('avg_variance') if isinstance(entry.get('analysis', {}), dict) else None
+                    if rep_file_s1 is None:
+                        rep_file_s1 = entry.get('file')
                     if isinstance(d, (int, float)):
                         s1.append(float(d))
                         all_side1.append(float(d))
@@ -198,12 +237,19 @@ def analyze_corpus(args):
                         all_side1_var.append(float(var))
         plot_side0_by_disk.append(s0)
         plot_side1_by_disk.append(s1)
-        disk_labels.append(Path(mp).parent.name)
+        # Prefer representative stream filename as the disk label for user-facing plots
+        rep_name_s0 = Path(rep_file_s0).name if isinstance(rep_file_s0, str) else None
+        rep_name_s1 = Path(rep_file_s1).name if isinstance(rep_file_s1, str) else None
+        preferred_label = rep_name_s0 or rep_name_s1 or Path(mp).parent.name
+        disk_labels.append(preferred_label)
+        # Legend labels prefer representative stream filename; fallback to preferred_label
+        labels_side0.append(rep_name_s0 or preferred_label)
+        labels_side1.append(rep_name_s1 or preferred_label)
         per_disk_tracks_side0.append((disk_labels[-1], per_disk_t0))
         per_disk_tracks_side1.append((disk_labels[-1], per_disk_t1))
         disk_stats = {
             'path': str(mp),
-            'label': Path(mp).parent.name,
+            'label': preferred_label,
             'side0': {
                 'count': len(s0),
                 'min': float(np.min(s0)) if s0 else None,
@@ -314,7 +360,7 @@ def analyze_corpus(args):
         # Overlay density curves per disk (approximate via normalized histograms)
         if any(len(x) for x in plot_side0_by_disk):
             plt.figure(figsize=(9,5))
-            for dens, label in zip(plot_side0_by_disk, disk_labels):
+            for dens, label in zip(plot_side0_by_disk, labels_side0):
                 if not dens:
                     continue
                 counts, bins = np.histogram(dens, bins=min(40, max(10, int(len(dens)/5))), density=True)
@@ -333,7 +379,7 @@ def analyze_corpus(args):
             plt.close()
         if any(len(x) for x in plot_side1_by_disk):
             plt.figure(figsize=(9,5))
-            for dens, label in zip(plot_side1_by_disk, disk_labels):
+            for dens, label in zip(plot_side1_by_disk, labels_side1):
                 if not dens:
                     continue
                 counts, bins = np.histogram(dens, bins=min(40, max(10, int(len(dens)/5))), density=True)
@@ -354,11 +400,19 @@ def analyze_corpus(args):
         for label, tracks in per_disk_tracks_side0:
             if tracks:
                 xs, ys = zip(*sorted(tracks, key=lambda t: t[0]))
-                plt.figure(figsize=(7,4))
-                plt.scatter(xs, ys, s=10, alpha=0.7, color='steelblue')
-                plt.title(f'{label} - Side 0: Track vs Density')
-                plt.xlabel('Track Index')
-                plt.ylabel('Bits per Revolution')
+                fig, axs = plt.subplots(1, 1, figsize=(7,4))
+                pcm = axs.scatter(xs, ys, s=10, alpha=0.7, color='steelblue')
+                axs.set_title(f'{label} - Side 0: Track vs Density')
+                axs.set_xlabel('Track Index')
+                axs.set_ylabel('Bits per Revolution')
+                if pcm is not None:
+                    # Place a vertical colorbar to the right, outside the subplots
+                    from mpl_toolkits.axes_grid1 import make_axes_locatable
+                    # Use the last axes to anchor the colorbar
+                    divider = make_axes_locatable(axs)
+                    cax = divider.append_axes("right", size="5%", pad=0.1)
+                    cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+                    cbar.set_label('Bits per Revolution')
                 plt.tight_layout()
                 safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
                 plt.savefig(str(run_dir / f'corpus_tracks_side0_{safe_label}.png'), dpi=150)
@@ -877,12 +931,21 @@ def analyze_disk(args):
             total_revs += len(analyzer.revolutions)
             total_flux_sum += np.sum(analyzer.flux_data)
     
+    # Derive label early for later use
+    try:
+        in_path_for_label = Path(args.input)
+        label = in_path_for_label.stem if in_path_for_label.is_file() else in_path_for_label.name
+    except Exception:
+        label = 'disk'
+    safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+
     if global_flux:
         global_analyzer = FluxAnalyzer()
         global_analyzer.flux_data = np.array(global_flux)
         global_analyzer.revolutions = global_revs
         
         # Compute global stats
+        density_class = None
         if len(global_flux) > 0:
             total_time = np.sum(global_flux)
             rev_time = total_time / max(1, total_revs)
@@ -898,6 +961,12 @@ def analyze_disk(args):
                 'measured_rpm': 60000000000 / rev_time if rev_time > 0 else 0,
             }
             global_analyzer.stats = global_stats
+            # Simple density class heuristic: HD (1.2MB) typically ~2us cells, DD (360KB) ~4us
+            try:
+                mi = global_stats.get('mean_interval_ns') or 0
+                density_class = 'HD (1.2MB)' if mi > 0 and mi < 3000 else 'DD (360KB)'
+            except Exception:
+                density_class = None
             
             # RPM validation if provided
             rpm_drift = None
@@ -984,77 +1053,10 @@ def analyze_disk(args):
         }
     else:
         print("No flux data overall")
+        # In corpus mode, we rely on the per-disk composite produced by analyze_disk
+        # and copied to disks/<label>/<label>_composite.png above. No extra per-disk plots are created here.
     
-    # Helper: render disk surface polar plots per side
-    def _render_disk_surface(sm: dict, out_prefix: Path):
-        def side_entries(track_obj, side_int):
-            if not isinstance(track_obj, dict):
-                return []
-            if side_int in track_obj:
-                return track_obj.get(side_int, [])
-            return track_obj.get(str(side_int), [])
-        max_track = max([int(k) for k in sm.keys() if k != 'global'], default=83)
-        T = max(max_track+1, 1)
-        # Build per-side radial arrays of average density
-        radials = {}
-        masks = {}
-        for side in [0, 1]:
-            radial = np.zeros(T)
-            has = np.zeros(T, dtype=bool)
-            for tk in sm:
-                if tk == 'global':
-                    continue
-                try:
-                    ti = int(tk)
-                except Exception:
-                    continue
-                dens_vals = []
-                for entry in side_entries(sm[tk], side):
-                    if isinstance(entry, dict):
-                        d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
-                        if isinstance(d, (int, float)):
-                            dens_vals.append(float(d))
-                if dens_vals:
-                    radial[ti] = float(np.mean(dens_vals))
-                    has[ti] = True
-            radials[side] = radial
-            masks[side] = has
-        if not (masks[0].any() or masks[1].any()):
-            return
-        theta = np.linspace(0, 2*np.pi, 360)
-        r = np.arange(T)
-        R, TH = np.meshgrid(r, theta, indexing='ij')
-        fig, axs = plt.subplots(1, 2, subplot_kw={'projection': 'polar'}, figsize=(11,5))
-        pcm = None
-        for idx, side in enumerate([0, 1]):
-            radial = radials[side]
-            has = masks[side]
-            if has.any():
-                vmin = np.percentile(radial[has], 5)
-                vmax = np.percentile(radial[has], 95)
-                vmax = vmax if vmax > vmin else vmin + 1.0
-                Z = np.repeat(radial[:, None], theta.shape[0], axis=1)
-                pcm = axs[idx].pcolormesh(TH.T, R.T, Z.T, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
-                axs[idx].set_ylim(0, T)
-                axs[idx].set_yticks([0, T//4, T//2, 3*T//4, T-1])
-                axs[idx].set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
-                axs[idx].set_title(f"Side {side}")
-            else:
-                axs[idx].set_title(f"Side {side} (no data)")
-                axs[idx].set_ylim(0, T)
-        if pcm is not None:
-            cbar = fig.colorbar(pcm, ax=axs.ravel().tolist(), pad=0.08)
-            cbar.set_label('Bits per Revolution')
-        plt.tight_layout()
-        plt.savefig(str(out_prefix) + "_disk_surface.png", dpi=150)
-        plt.close()
-
-    # Save map
-    map_path = run_dir / "surface_map.json"
-    with open(map_path, 'w') as f:
-        json.dump(surface_map, f, indent=2, default=str)
-    print(f"Surface map saved to {map_path}")
-    # Render disk-surface plots
+    # Render disk-surface plots (isolated try so subsequent composite still builds if this fails)
     try:
         # Derive a human-friendly label from input path (file stem or directory name)
         try:
@@ -1065,6 +1067,23 @@ def analyze_disk(args):
         safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
         _render_disk_surface(surface_map, run_dir / Path(f'{safe_label}_surface'))
         print("Disk surface plot saved (<label>_surface_disk_surface.png)")
+    except Exception as e:
+        print(f"Disk surface plot failed: {e}")
+
+    # Build per-track density/variance arrays for additional plots and composite
+    try:
+        # Use previously derived label/safe_label; if missing, derive now
+        try:
+            label
+        except NameError:
+            in_path = Path(args.input)
+            label = in_path.stem if in_path.is_file() else in_path.name
+            safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+        # Build per-track density/variance arrays for additional plots
+        def side_entries(track_obj, side_int):
+            if not isinstance(track_obj, dict):
+                return []
+            if side_int in track_obj:
                 return track_obj.get(side_int, [])
             return track_obj.get(str(side_int), [])
         T = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
@@ -1128,8 +1147,86 @@ def analyze_disk(args):
             plt.close()
 
         # Keep outputs simple: removed top/bottom per-track bar charts
+
+        # Composite report (single large image): flux intervals, histogram, heatmap (if present),
+        # polar disk surface, density-by-track, variance-by-track
+        # Try to load existing flux plots saved earlier by analyzer.visualize
+        base_stem = Path(args.input).stem
+        intervals_img = run_dir / f"{base_stem}_intervals.png"
+        hist_img = run_dir / f"{base_stem}_histogram.png"
+        heatmap_img = run_dir / f"{base_stem}_heatmap.png"
+        polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
+        dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
+        var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
+
+        # Fallback: search within subfolders under run_dir if direct paths missing
+        def find_first(glob_pat):
+            try:
+                hits = list(run_dir.rglob(glob_pat))
+                return hits[0] if hits else None
+            except Exception:
+                return None
+        if not intervals_img.exists():
+            alt = find_first(f"*{base_stem}_intervals.png")
+            if alt: intervals_img = alt
+        if not intervals_img.exists():
+            alt = find_first("entire_disk_intervals.png")
+            if alt: intervals_img = alt
+        if not hist_img.exists():
+            alt = find_first(f"*{base_stem}_histogram.png")
+            if alt: hist_img = alt
+        if not hist_img.exists():
+            alt = find_first("entire_disk_hist.png")
+            if alt: hist_img = alt
+        if not heatmap_img.exists():
+            alt = find_first(f"*{base_stem}_heatmap.png")
+            if alt: heatmap_img = alt
+        if not heatmap_img.exists():
+            alt = find_first("entire_disk_heatmap.png")
+            if alt: heatmap_img = alt
+
+        # Build figure with up to 6 panels
+        import math
+        fig = plt.figure(figsize=(16, 12))
+        title_suffix = f"  •  {density_class}" if density_class else ""
+        fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
+
+        def add_image_subplot(idx, path, title):
+            ax = fig.add_subplot(3, 2, idx)
+            if path.exists():
+                try:
+                    img = plt.imread(str(path))
+                    ax.imshow(img)
+                    ax.set_title(title)
+                    ax.axis('off')
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"Failed to load {path.name}: {e}", ha='center', va='center')
+                    ax.axis('off')
+            else:
+                ax.text(0.5, 0.5, f"Missing {path.name}", ha='center', va='center')
+                ax.axis('off')
+
+        add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
+        add_image_subplot(2, hist_img, 'Flux Interval Histogram')
+        add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
+        add_image_subplot(4, polar_img, 'Disk Surface (density)')
+        add_image_subplot(5, dens_img, 'Density by Track')
+        add_image_subplot(6, var_img, 'Variance by Track')
+
+        comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+        plt.savefig(str(comp_path), dpi=150)
+        plt.close()
+        print(f"Composite report saved to {comp_path}")
+        # Save classification tag to text for quick reference
+        try:
+            if density_class:
+                with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
+                    cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+        except Exception:
+            pass
     except Exception as e:
-        print(f"Disk surface plot failed: {e}")
+        print(f"Composite generation failed: {e}")
     total_tracks = len(surface_map) - 1  # exclude global
     total_entries = sum(len(sides) for sides in surface_map.values()) - 1
     global_insights = surface_map['global'].get('insights', {})
