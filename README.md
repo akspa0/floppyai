@@ -1,5 +1,13 @@
 # FloppyAI
 
+<p align="center">
+  <a href="src/samples/disk1_composite_report.png">
+    <img src="src/samples/disk1_composite_report.png" alt="Sample per-disk composite report" width="400" />
+  </a>
+  <br/>
+  <em>Sample per‑disk composite: flux plots, polar disk surface (both sides), density/variance by track</em>
+ </p>
+
 FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnetic surface of floppy disks. There is no sector-level assumption; we work purely at the flux level to find strong/weak regions and plan better data layouts.
 
 ## Quick Start (Corpus-first)
