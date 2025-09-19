@@ -1,103 +1,87 @@
-8. **Analyze Corpus** (Aggregate `surface_map.json`; generate per-disk composites & corpus plots):
-   ```
-   python main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm 360] [--summarize] [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
-   ```
-   - Use `--generate-missing` to scan for `.raw` and auto-run `analyze_disk` into `test_outputs/<corpus_ts>/disks/<disk-label>/`.
-   - Aggregates per-disk stats and writes:
-     - `disks/<disk-label>/<disk-label>_composite.png` (one image per disk)
-     - `disks/<disk-label>/<disk-label>_disk_surface.png` (standalone polar map)
-     - `corpus_summary.json` and corpus plots (`corpus_*`).
-   - Optional LLM corpus summary:
-     - `llm_corpus_summary.json` and `.txt` with strict JSON, including `per_disk` summaries.
-   - Example:
-     - `python main.py analyze_corpus ..\stream_dumps --generate-missing --rpm 360 --summarize --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0`
-
 # FloppyAI
 
-A CLI for analyzing KryoFlux `.raw` streams, visualizing disk surfaces, and summarizing corpora. It produces a single composite image per disk that includes flux plots, a combined polar disk-surface map (Side 0 and Side 1), and density/variance by track.
-
-Highlights
-- One image per disk in corpus runs: `<disk-label>_composite.png`.
-- Combined polar “disk surface” visualization with vertical colorbar on the right.
-- Input-derived naming (stream filename or folder name) for clean, meaningful outputs.
-- Optional local LLM summaries (strict JSON with per-disk details).
+FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnetic surface of floppy disks. There is no sector-level assumption; we work purely at the flux level to find strong/weak regions and plan better data layouts.
 
 ## Quick Start (Corpus-first)
 
-Goal: Explore magnetic flux recording characteristics across many disks without any sector-level assumptions. We focus on surface mapping (density/noise) from raw KryoFlux streams to find strong/weak regions and decide how to write data back better.
+1) Prepare your dumps
+- Organize per-disk under a root folder, for example:
+  - `stream_dumps/`
+    - `diskA/kryoflux_stream/*.raw`
+    - `diskB/kryoflux_stream/*.raw`
+- Name the folders meaningfully; output labels derive from these names.
 
-1) Prepare a corpus of KryoFlux streams
-- Layout example (recommended):
-  - `stream_dumps/` (root)
-    - `diskA/` (your disk label)
-      - `kryoflux_stream/` (all .raw for this disk)
-    - `diskB/`
-      - `kryoflux_stream/`
-- Name folders after the stream or the physical disk for meaningful labels.
-
-2) Run corpus analysis (auto-generate per-disk maps and images)
+2) Run corpus analysis
 ```
 cd FloppyAI/src
 python main.py analyze_corpus ..\stream_dumps --generate-missing --rpm 360 --summarize \
- --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0
+  --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0
 ```
-- `--generate-missing` finds `.raw` sets and runs `analyze_disk` for each disk.
-- `--rpm 360` assumes a 1.2MB 5.25" drive running at 360 RPM (Canon/1989; Shugart interface).
+- `--generate-missing` processes each disk with `analyze_disk`.
+- `--rpm 360` assumes a 1.2MB 5.25" drive.
 
-3) Inspect results (one clean image per disk)
-- Open `test_outputs/<timestamp>/disks/<disk-label>/<disk-label>_composite.png`
-- Also available: `.../<disk-label>_disk_surface.png` (standalone polar map)
-- Corpus summary + plots are in `test_outputs/<timestamp>/` (e.g., `corpus_summary.json`, `corpus_side*_*.png`).
+3) Inspect outputs
+- One image per disk: `test_outputs/<timestamp>/disks/<disk-label>/<disk-label>_composite.png`
+- Standalone polar disk surface: `.../<disk-label>_disk_surface.png`
+- Corpus summary and plots: `test_outputs/<timestamp>/corpus_*` and `corpus_summary.json`
 
 4) Interpret the composite
-- Top row: Flux intervals (time series) and histogram (distribution of interval lengths).
-- Middle left: Flux heatmap (revolution vs. position) highlights weak/strong regions.
-- Middle right: Polar Disk Surface (Side 0 and Side 1) — average bits-per-rev per track; colorbar shows density.
-- Bottom row: Density-by-track and Variance-by-track per side.
-- Title includes a heuristic density class (HD 1.2MB vs DD 360KB) based on mean interval length.
+- Flux intervals and histogram reveal timing distribution.
+- Flux heatmap (rev vs position) shows surface consistency and weak regions.
+- Polar map overlays Side 0/1 density per track with a clear colorbar.
+- Density/Variance by track show radial trends.
+- Title includes a simple HD/DD heuristic from mean cell interval.
 
-5) Suggested workflow (surface-first, no sectors)
-- Start with new unformatted floppies to build a baseline per disk: run the corpus with only blank reads.
-- Format some disks and re-run; compare polar and variance maps — looking for stable/unstable (weak) regions.
-- Use these surface maps to plan writing patterns (e.g., avoid high-variance bands; exploit strong tracks for dense packing).
-- Repeat per disk — baselines are disk-specific; the drive is constant at 360 RPM for comparability.
-
-Notes
-- We are deliberately NOT performing sector-level analysis. Everything is done at the raw flux level to characterize the magnetic surface and encoding viability.
-- Labels are derived from stream file/folder names so results are human-meaningful.
-
-## Installation
-1. Ensure Python 3.8+ and pip.
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-   (NumPy, SciPy, Matplotlib for analysis/visualization; scikit-learn/Torch for ML; lmstudio for official LM Studio SDK integration.)
-
-3. For hardware: Connect KryoFlux to PC; ensure drivers installed. DTC.exe is in `../lib/kryoflux_3.50_windows_r2/dtc/`.
-
-4. For LLM summaries (optional): Run LM Studio on localhost:1234 (or specify --lm-host) with a local model loaded. Recommended models for clean technical summaries (avoid models that show internal thinking tags):
-   - **Qwen2-Coder Instruct (or Qwen2.5-Coder Instruct)**: Best for JSON-structured outputs and disciplined numeric summaries
-   - **Qwen2-7B-Instruct**: Produces clean, technical summaries without thinking tags
-   - **Gemma 7B Instruct**: Good for structured technical analysis
-   - **Llama 3 8B Instruct**: Reliable but may occasionally show reasoning
-   - **Mistral 7B Instruct**: Efficient but test for clean output
-
-   The system prompt explicitly instructs models to avoid thinking tags and provide only final professional summaries. The tool uses strict JSON schemas and deterministic fallbacks for reliability. For best results, use coder/instruct models that follow JSON directions closely.
+5) Workflow (surface-first)
+- Build baselines on new, unformatted floppies.
+- Format, re-read, and compare to the baseline.
+- Use the maps to plan where/what to write back (avoid noisy bands; pack stronger tracks).
 
 ## Usage
-Run from `FloppyAI/src/` (or use `python -m FloppyAI.src.main` from project root):
+
+Run from `FloppyAI/src/` or use `python -m FloppyAI.src.main`.
 ```
-cd FloppyAI/src  # Or run from root with python -m FloppyAI.src.main
 python main.py --help
 ```
-Global options (place before subcommand): `--lm-host HOST[:PORT]`, `--lm-model NAME`.
-LLM options (analyze_disk / analyze_corpus): `--lm-temperature FLOAT` (default 0.2).
-Example: `python main.py --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned analyze_disk [path] --summarize --lm-temperature 0.0`
 
-Note: Commands like analyze_disk do not take positional file arguments; use specific subcommands for single files.
+### analyze_corpus
+```
+python main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm 360] [--summarize] \
+  [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
+```
+Outputs are placed under `test_outputs/<timestamp>/disks/<disk-label>/`. If you provide `--output-dir` to analyze_corpus, that directory is used instead of a timestamp.
 
-### Commands
+### analyze_disk
+```
+python main.py analyze_disk <path-to-dir-or-raw> [--rpm 360] [--summarize] [--lm-host HOST:PORT] \
+  [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
+```
+Saves `surface_map.json`, flux plots, the combined polar disk-surface (`<label>_surface_disk_surface.png`), and a single composite image (`<label>_composite_report.png`).
+
+### analyze (single .raw)
+```
+python main.py analyze <input.raw> [--output-dir]
+```
+Generates per-file flux plots and stats.
+
+## Installation
+
+1. Python 3.8+ and `pip`.
+2. `pip install -r requirements.txt`.
+3. Hardware: KryoFlux connected; DTC.exe in `../lib/kryoflux_3.50_windows_r2/dtc/`.
+4. Optional LLM: run LM Studio locally and pass `--lm-host` and `--lm-model`.
+
+## Disk Surface Visualization
+
+Polar map shows average bits-per-revolution per track (radius = track index). Both sides are in one figure with the colorbar to the right. Output naming uses input-derived labels for clarity.
+
+## Notes
+
+- Outputs respect `--output-dir` without adding timestamps. If omitted, `test_outputs/<timestamp>/` is used.
+- We intentionally avoid sector/FS assumptions to focus on physical surface characteristics.
+- The corpus overlays and per-disk labels prefer stream file names.
+
+## Commands
 
 1. **Analyze a Stream File** (Decode and visualize `.raw`):
    ```

@@ -1056,6 +1056,101 @@ def analyze_disk(args):
         # In corpus mode, we rely on the per-disk composite produced by analyze_disk
         # and copied to disks/<label>/<label>_composite.png above. No extra per-disk plots are created here.
     
+    # Helper: render combined polar disk-surface (both sides) and always save an image
+    def _render_disk_surface(sm: dict, out_prefix: Path):
+        def side_entries(track_obj, side_int):
+            if not isinstance(track_obj, dict):
+                return []
+            if side_int in track_obj:
+                return track_obj.get(side_int, [])
+            return track_obj.get(str(side_int), [])
+        try:
+            max_track = max([int(k) for k in sm.keys() if k != 'global'], default=83)
+        except Exception:
+            max_track = 83
+        T = max(max_track + 1, 1)
+        radials = {}
+        masks = {}
+        counts = {}
+        for side in [0, 1]:
+            radial = np.zeros(T)
+            has = np.zeros(T, dtype=bool)
+            c = 0
+            for tk in sm:
+                if tk == 'global':
+                    continue
+                try:
+                    ti = int(tk)
+                except Exception:
+                    continue
+                dens_vals = []
+                for entry in side_entries(sm[tk], side):
+                    if isinstance(entry, dict):
+                        d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                        if isinstance(d, (int, float)):
+                            dens_vals.append(float(d))
+                if dens_vals:
+                    radial[ti] = float(np.mean(dens_vals))
+                    has[ti] = True
+                    c += 1
+            radials[side] = radial
+            masks[side] = has
+            counts[side] = c
+        print(f"Disk surface: tracks with data — side0={counts.get(0,0)}, side1={counts.get(1,0)}")
+
+        # Compute a shared color scale across both sides
+        vals = []
+        for s in [0, 1]:
+            if masks[s].any():
+                vals.extend(radials[s][masks[s]].tolist())
+        if len(vals) >= 2:
+            vmin = float(np.percentile(vals, 5))
+            vmax = float(np.percentile(vals, 95))
+            if vmax <= vmin:
+                vmax = vmin + 1.0
+        else:
+            vmin, vmax = 0.0, 1.0
+
+        # Build grids once
+        theta = np.linspace(0, 2*np.pi, 360)
+        r = np.arange(T)
+        TH, R = np.meshgrid(theta, r)  # shapes: (T, 360)
+
+        # Layout: side0 | side1 | colorbar
+        from matplotlib.gridspec import GridSpec
+        fig = plt.figure(figsize=(12, 5))
+        gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
+        ax0 = fig.add_subplot(gs[0, 0], projection='polar')
+        ax1 = fig.add_subplot(gs[0, 1], projection='polar')
+        cax = fig.add_subplot(gs[0, 2])
+
+        pcm = None
+        for ax, side in [(ax0, 0), (ax1, 1)]:
+            radial = radials[side]
+            has = masks[side]
+            if has.any():
+                Z = np.repeat(radial[:, None], theta.shape[0], axis=1)  # (T, 360)
+                pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+                ax.set_ylim(0, T)
+                ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
+                ax.set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+                ax.set_title(f"Side {side}")
+            else:
+                ax.set_title(f"Side {side} (no data)")
+                ax.set_ylim(0, T)
+                ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+
+        # Colorbar
+        if pcm is not None:
+            cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+            cbar.set_label('Bits per Revolution')
+
+        plt.tight_layout()
+        outfile = Path(str(out_prefix) + "_disk_surface.png")
+        plt.savefig(str(outfile), dpi=150)
+        plt.close()
+        print(f"Disk surface saved to {outfile}")
+
     # Render disk-surface plots (isolated try so subsequent composite still builds if this fails)
     try:
         # Derive a human-friendly label from input path (file stem or directory name)
@@ -1145,91 +1240,95 @@ def analyze_disk(args):
         plt.savefig(str(run_dir / f'{safe_label}_variance_by_track.png'), dpi=150)
         plt.close()
 
+    except Exception as e:
+        print(f"Per-track plots failed: {e}")
+
     # Keep outputs simple: removed top/bottom per-track bar charts
 
     # Composite report (single large image): flux intervals, histogram, heatmap (if present),
     # polar disk surface, density-by-track, variance-by-track
-    # Try to load existing flux plots saved earlier by analyzer.visualize
-    base_stem = Path(args.input).stem
-    intervals_img = run_dir / f"{base_stem}_intervals.png"
-    hist_img = run_dir / f"{base_stem}_histogram.png"
-    heatmap_img = run_dir / f"{base_stem}_heatmap.png"
-    polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
-    dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
-    var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
-
-    # Fallback: search within subfolders under run_dir if direct paths missing
-    def find_first(glob_pat):
-        try:
-            hits = list(run_dir.rglob(glob_pat))
-            return hits[0] if hits else None
-        except Exception:
-            return None
-    if not intervals_img.exists():
-        alt = find_first(f"*{base_stem}_intervals.png")
-        if alt: intervals_img = alt
-    if not intervals_img.exists():
-        alt = find_first("entire_disk_intervals.png")
-        if alt: intervals_img = alt
-    if not hist_img.exists():
-        alt = find_first(f"*{base_stem}_histogram.png")
-        if alt: hist_img = alt
-    if not hist_img.exists():
-        alt = find_first("entire_disk_hist.png")
-        if alt: hist_img = alt
-    if not heatmap_img.exists():
-        alt = find_first(f"*{base_stem}_heatmap.png")
-        if alt: heatmap_img = alt
-    if not heatmap_img.exists():
-        alt = find_first("entire_disk_heatmap.png")
-        if alt: heatmap_img = alt
-    if not polar_img.exists():
-        alt = find_first(f"*{safe_label}_surface_disk_surface.png")
-        if alt: polar_img = alt
-    if not polar_img.exists():
-        alt = find_first("*_disk_surface.png")
-        if alt: polar_img = alt
-
-    # Build figure with up to 6 panels
-    import math
-    fig = plt.figure(figsize=(16, 12))
-    title_suffix = f"  •  {density_class}" if density_class else ""
-    fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
-
-    def add_image_subplot(idx, path, title):
-        ax = fig.add_subplot(3, 2, idx)
-        if path.exists():
-            try:
-                img = plt.imread(str(path))
-                ax.imshow(img)
-                ax.set_title(title)
-                ax.axis('off')
-            except Exception as e:
-                ax.text(0.5, 0.5, f"Failed to load {path.name}: {e}", ha='center', va='center')
-                ax.axis('off')
-        else:
-            ax.text(0.5, 0.5, f"Missing {path.name}", ha='center', va='center')
-            ax.axis('off')
-
-    add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
-    add_image_subplot(2, hist_img, 'Flux Interval Histogram')
-    add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
-    add_image_subplot(4, polar_img, 'Disk Surface (density)')
-    add_image_subplot(5, dens_img, 'Density by Track')
-    add_image_subplot(6, var_img, 'Variance by Track')
-
-    comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-    plt.savefig(str(comp_path), dpi=150)
-    plt.close()
-    print(f"Composite report saved to {comp_path}")
-    # Save classification tag to text for quick reference
     try:
-        if density_class:
-            with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
-                cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
-    except Exception:
-        pass
+        base_stem = Path(args.input).stem
+        intervals_img = run_dir / f"{base_stem}_intervals.png"
+        hist_img = run_dir / f"{base_stem}_histogram.png"
+        heatmap_img = run_dir / f"{base_stem}_heatmap.png"
+        polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
+        dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
+        var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
+
+        # Fallback: search within subfolders under run_dir if direct paths missing
+        def find_first(glob_pat):
+            try:
+                hits = list(run_dir.rglob(glob_pat))
+                return hits[0] if hits else None
+            except Exception:
+                return None
+        if not intervals_img.exists():
+            alt = find_first(f"*{base_stem}_intervals.png")
+            if alt: intervals_img = alt
+        if not intervals_img.exists():
+            alt = find_first("entire_disk_intervals.png")
+            if alt: intervals_img = alt
+        if not hist_img.exists():
+            alt = find_first(f"*{base_stem}_histogram.png")
+            if alt: hist_img = alt
+        if not hist_img.exists():
+            alt = find_first("entire_disk_hist.png")
+            if alt: hist_img = alt
+        if not heatmap_img.exists():
+            alt = find_first(f"*{base_stem}_heatmap.png")
+            if alt: heatmap_img = alt
+        if not heatmap_img.exists():
+            alt = find_first("entire_disk_heatmap.png")
+            if alt: heatmap_img = alt
+        if not polar_img.exists():
+            alt = find_first(f"*{safe_label}_surface_disk_surface.png")
+            if alt: polar_img = alt
+        if not polar_img.exists():
+            alt = find_first("*_disk_surface.png")
+            if alt: polar_img = alt
+
+        # Build figure with up to 6 panels
+        fig = plt.figure(figsize=(16, 12))
+        title_suffix = f"  •  {density_class}" if density_class else ""
+        fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
+
+        def add_image_subplot(idx, path, title):
+            ax = fig.add_subplot(3, 2, idx)
+            if path.exists():
+                try:
+                    img = plt.imread(str(path))
+                    ax.imshow(img)
+                    ax.set_title(title)
+                    ax.axis('off')
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"Failed to load {path.name}: {e}", ha='center', va='center')
+                    ax.axis('off')
+            else:
+                ax.text(0.5, 0.5, f"Missing {path.name}", ha='center', va='center')
+                ax.axis('off')
+
+        add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
+        add_image_subplot(2, hist_img, 'Flux Interval Histogram')
+        add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
+        add_image_subplot(4, polar_img, 'Disk Surface (density)')
+        add_image_subplot(5, dens_img, 'Density by Track')
+        add_image_subplot(6, var_img, 'Variance by Track')
+
+        comp_path = run_dir / Path(f"{safe_label}_composite_report.png")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+        plt.savefig(str(comp_path), dpi=150)
+        plt.close()
+        print(f"Composite report saved to {comp_path}")
+        # Save classification tag to text for quick reference
+        try:
+            if density_class:
+                with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
+                    cf.write(f"density_class={density_class}\nmean_interval_ns={global_stats.get('mean_interval_ns')}\n")
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"Composite generation failed: {e}")
     total_tracks = len(surface_map) - 1  # exclude global
     total_entries = sum(len(sides) for sides in surface_map.values()) - 1
     global_insights = surface_map['global'].get('insights', {})
