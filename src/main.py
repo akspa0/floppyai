@@ -107,6 +107,21 @@ def analyze_corpus(args):
     inputs = []
     base = Path(args.inputs)
 
+    # Resolve effective RPM from profile or explicit value
+    rpm_profile_map = {
+        '35HD': 300.0,   # 3.5" 1.44MB
+        '35DD': 300.0,   # 3.5" 720KB
+        '525HD': 360.0,  # 5.25" 1.2MB
+        '525DD': 300.0,  # 5.25" 360KB
+    }
+    try:
+        profile = getattr(args, 'profile', None)
+    except Exception:
+        profile = None
+    effective_rpm = (
+        float(args.rpm) if getattr(args, 'rpm', None) is not None else rpm_profile_map.get(profile, 360.0)
+    )
+
     # Optionally generate surface_map.json for directories containing .raw files
     if getattr(args, 'generate_missing', False) and base.is_dir():
         raw_dirs = {p.parent for p in base.rglob('*.raw')}
@@ -119,7 +134,7 @@ def analyze_corpus(args):
                 disk_dir.mkdir(parents=True, exist_ok=True)
                 # Invoke analyze_disk programmatically, directing outputs to disk_dir
                 disk_args = argparse.Namespace(
-                    input=str(d), track=None, side=None, rpm=getattr(args, 'rpm', 360),
+                    input=str(d), track=None, side=None, rpm=effective_rpm,
                     lm_host=getattr(args, 'lm_host', 'localhost:1234'),
                     lm_model=getattr(args, 'lm_model', 'local-model'),
                     lm_temperature=getattr(args, 'lm_temperature', 0.2),
@@ -890,6 +905,10 @@ def analyze_disk(args):
             })
         print(f"Processed track {track:02d} side {side} ({len(data_list)} files)")
     
+    # Prepare containers for per-track/side quality metrics
+    instab_by_side = {0: {}, 1: {}}
+    struct_by_side = {0: {}, 1: {}}
+
     # Save map with aggregated stats if multiple files
     for track in surface_map:
         for side in surface_map[track]:
@@ -908,15 +927,57 @@ def analyze_disk(args):
                     'analysis': 'Aggregated across files'
                 })
             
-            # Add side-specific summary (after aggregation)
+            # Add side-specific summary (after aggregation) with structure/instability scoring
             if len(data_entries) >= 1:
                 avg_protection = np.mean([e['analysis'].get('protection_score', 0) for e in data_entries])
                 side_max_density = np.mean([e['analysis'].get('max_theoretical_density_bits_per_rev', 0) for e in data_entries])
+                # Compute structure_score and instability_score (flux-first, sector-agnostic)
+                struct_vals = []
+                instab_vals = []
+                dens_vals = []
+                var_vals = []
+                for e in data_entries:
+                    stats = e.get('stats', {})
+                    analysis = e.get('analysis', {})
+                    anomalies = analysis.get('anomalies', {}) if isinstance(analysis, dict) else {}
+                    noise = analysis.get('noise_profile', {}) if isinstance(analysis, dict) else {}
+                    mean_i = float(stats.get('mean_interval_ns') or 0.0)
+                    std_i = float(stats.get('std_interval_ns') or 0.0)
+                    total_fluxes = float(stats.get('total_fluxes') or 0.0)
+                    short_cnt = float(len(anomalies.get('short_cells', []))) if isinstance(anomalies.get('short_cells', []), (list, tuple)) else 0.0
+                    long_cnt = float(len(anomalies.get('long_intervals', []))) if isinstance(anomalies.get('long_intervals', []), (list, tuple)) else 0.0
+                    outlier_frac = (short_cnt + long_cnt) / total_fluxes if total_fluxes > 0 else 0.0
+                    # Relative variability
+                    rel_var = (std_i / mean_i) if mean_i > 0 else 0.0
+                    rel_var_norm = min(1.0, rel_var / 0.5)  # 0.5 is a conservative high-variance reference
+                    # Structure score: low variability implies more structure
+                    structure_score = float(max(0.0, min(1.0, 1.0 - rel_var_norm)))
+                    struct_vals.append(structure_score)
+                    # Instability score: combine relative variance and outlier fraction
+                    instab_component = 0.5 * rel_var_norm + 0.5 * min(1.0, outlier_frac)
+                    instab_vals.append(float(max(0.0, min(1.0, instab_component))))
+                    # For CSV aggregates
+                    dens = analysis.get('density_estimate_bits_per_rev')
+                    if isinstance(dens, (int, float)):
+                        dens_vals.append(float(dens))
+                    nv = noise.get('avg_variance')
+                    if isinstance(nv, (int, float)):
+                        var_vals.append(float(nv))
+
+                structure_score_side = float(np.mean(struct_vals)) if struct_vals else 0.0
+                instability_score_side = float(np.mean(instab_vals)) if instab_vals else 0.0
+                instab_by_side[side][track] = instability_score_side
+                struct_by_side[side][track] = structure_score_side
+
                 surface_map[track][side].append({
                     'side_summary': True,
                     'avg_protection_score': float(avg_protection),
                     'avg_max_density': int(side_max_density),
-                    'likely_protected': avg_protection > 0.3
+                    'likely_protected': avg_protection > 0.3,
+                    'structure_score': structure_score_side,
+                    'instability_score': instability_score_side,
+                    'avg_density_bits_per_rev': float(np.mean(dens_vals)) if dens_vals else None,
+                    'avg_variance': float(np.mean(var_vals)) if var_vals else None
                 })
     
     # Global aggregation for entire disk visualization and analysis
@@ -968,13 +1029,18 @@ def analyze_disk(args):
             except Exception:
                 density_class = None
             
-            # RPM validation if provided
+            # Resolve effective RPM: --rpm overrides --profile; default 360 if none
+            rpm_profile_map = {'35HD': 300.0, '35DD': 300.0, '525HD': 360.0, '525DD': 300.0}
+            profile = getattr(args, 'profile', None)
+            effective_rpm = float(args.rpm) if getattr(args, 'rpm', None) is not None else rpm_profile_map.get(profile, 360.0)
+
+            # RPM validation if provided/derived
             rpm_drift = None
-            if args.rpm:
-                expected_rev_time = 60000000000 / args.rpm
+            if effective_rpm:
+                expected_rev_time = 60000000000 / effective_rpm
                 actual_rev_time = rev_time
                 rpm_drift = abs((actual_rev_time - expected_rev_time) / expected_rev_time * 100)
-                print(f"RPM validation: Expected {args.rpm} RPM, measured ~{global_stats['measured_rpm']:.1f} RPM, drift {rpm_drift:.2f}% (stable if <1%)")
+                print(f"RPM validation: Expected {effective_rpm} RPM, measured ~{global_stats['measured_rpm']:.1f} RPM, drift {rpm_drift:.2f}% (stable if <1%)")
                 global_stats['rpm_drift_pct'] = rpm_drift
                 # Normalize global for known RPM
                 global_scale = expected_rev_time / actual_rev_time if actual_rev_time > 0 else 1.0
@@ -982,7 +1048,7 @@ def analyze_disk(args):
                 global_stats['estimated_full_fluxes'] = len(global_flux) * global_scale
                 global_stats['density_bits_per_full_rev'] = int(8 * global_stats['estimated_full_fluxes'])
             else:
-                print(f"Global measured RPM: {global_stats['measured_rpm']:.1f} (use --rpm 360 for normalization and validation)")
+                print(f"Global measured RPM: {global_stats['measured_rpm']:.1f} (use --rpm 300 or --profile 35HD/35DD for 3.5\", or --rpm 360 / --profile 525HD for 5.25\")")
         
         # Single global visualizations for entire disk
         global_base = str(run_dir / "entire_disk")
@@ -1151,6 +1217,43 @@ def analyze_disk(args):
         plt.close()
         print(f"Disk surface saved to {outfile}")
 
+    # Helper: render per-track instability map (both sides) with shared color scale
+    def _render_instability_map(instab_scores: dict, T: int, out_prefix: Path):
+        # instab_scores: {0:{track:score}, 1:{track:score}}
+        # Build per-side radial arrays
+        radials = {}
+        for side in [0, 1]:
+            radial = np.zeros(T)
+            for ti in range(T):
+                radial[ti] = float(instab_scores.get(side, {}).get(ti, 0.0))
+            radials[side] = radial
+        vmin, vmax = 0.0, 1.0
+        theta = np.linspace(0, 2*np.pi, 360)
+        r = np.arange(T)
+        TH, R = np.meshgrid(theta, r)
+        from matplotlib.gridspec import GridSpec
+        fig = plt.figure(figsize=(12, 5))
+        gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
+        ax0 = fig.add_subplot(gs[0, 0], projection='polar')
+        ax1 = fig.add_subplot(gs[0, 1], projection='polar')
+        cax = fig.add_subplot(gs[0, 2])
+        pcm = None
+        for ax, side in [(ax0, 0), (ax1, 1)]:
+            Z = np.repeat(radials[side][:, None], theta.shape[0], axis=1)
+            pcm = ax.pcolormesh(TH, R, Z, cmap='magma', vmin=vmin, vmax=vmax, shading='auto')
+            ax.set_ylim(0, T)
+            ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
+            ax.set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+            ax.set_title(f"Side {side}")
+        if pcm is not None:
+            cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+            cbar.set_label('Instability Score (0-1)')
+        plt.tight_layout()
+        outfile = Path(str(out_prefix) + "_instability_map.png")
+        plt.savefig(str(outfile), dpi=150)
+        plt.close()
+        print(f"Instability map saved to {outfile}")
+
     # Render disk-surface plots (isolated try so subsequent composite still builds if this fails)
     try:
         # Derive a human-friendly label from input path (file stem or directory name)
@@ -1161,6 +1264,12 @@ def analyze_disk(args):
             label = 'disk'
         safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
         _render_disk_surface(surface_map, run_dir / Path(f'{safe_label}_surface'))
+        # Render instability map using per-track scores if available
+        try:
+            T = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
+            _render_instability_map(instab_by_side, T, run_dir / Path(f'{safe_label}'))
+        except Exception as e2:
+            print(f"Instability map generation failed: {e2}")
         print("Disk surface plot saved (<label>_surface_disk_surface.png)")
     except Exception as e:
         print(f"Disk surface plot failed: {e}")
@@ -1245,7 +1354,7 @@ def analyze_disk(args):
 
     # Keep outputs simple: removed top/bottom per-track bar charts
 
-    # Composite report (single large image): flux intervals, histogram, heatmap (if present),
+    # Composite report (single large image): flux intervals, histogram, heatmap/instability (if present),
     # polar disk surface, density-by-track, variance-by-track
     try:
         base_stem = Path(args.input).stem
@@ -1255,6 +1364,7 @@ def analyze_disk(args):
         polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
         dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
         var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
+        instab_img = run_dir / Path(f"{safe_label}_instability_map.png")
 
         # Fallback: search within subfolders under run_dir if direct paths missing
         def find_first(glob_pat):
@@ -1281,6 +1391,10 @@ def analyze_disk(args):
         if not heatmap_img.exists():
             alt = find_first("entire_disk_heatmap.png")
             if alt: heatmap_img = alt
+        # Instability map fallback search
+        if not instab_img.exists():
+            alt = find_first(f"*{safe_label}_instability_map.png")
+            if alt: instab_img = alt
         if not polar_img.exists():
             alt = find_first(f"*{safe_label}_surface_disk_surface.png")
             if alt: polar_img = alt
@@ -1310,7 +1424,8 @@ def analyze_disk(args):
 
         add_image_subplot(1, intervals_img, 'Flux Intervals (time series)')
         add_image_subplot(2, hist_img, 'Flux Interval Histogram')
-        add_image_subplot(3, heatmap_img, 'Flux Heatmap (rev vs. position)')
+        # Prefer instability map if present; otherwise show rev heatmap
+        add_image_subplot(3, instab_img if instab_img.exists() else heatmap_img, 'Instability Map' if instab_img.exists() else 'Flux Heatmap (rev vs. position)')
         add_image_subplot(4, polar_img, 'Disk Surface (density)')
         add_image_subplot(5, dens_img, 'Density by Track')
         add_image_subplot(6, var_img, 'Variance by Track')
@@ -1320,6 +1435,20 @@ def analyze_disk(args):
         plt.savefig(str(comp_path), dpi=150)
         plt.close()
         print(f"Composite report saved to {comp_path}")
+        # CSV export for per-track/side structure and instability scores
+        try:
+            import csv
+            csv_path = run_dir / Path(f"{safe_label}_instability_summary.csv")
+            with open(csv_path, 'w', newline='') as cf:
+                writer = csv.writer(cf)
+                writer.writerow(["track","side","structure_score","instability_score"]) 
+                T = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
+                for side in [0,1]:
+                    for ti in range(T):
+                        writer.writerow([ti, side, struct_by_side.get(side, {}).get(ti, 0.0), instab_by_side.get(side, {}).get(ti, 0.0)])
+            print(f"Instability summary CSV saved to {csv_path}")
+        except Exception as e_csv:
+            print(f"CSV export failed: {e_csv}")
         # Save classification tag to text for quick reference
         try:
             if density_class:
@@ -1742,7 +1871,8 @@ def main():
     analyze_disk_parser.add_argument("input", nargs='?', default="../example_stream_data/", help="Directory or single .raw file to analyze (default: ../example_stream_data/)")
     analyze_disk_parser.add_argument("--track", type=int, help="Manual track number if not parsable from filename")
     analyze_disk_parser.add_argument("--side", type=int, choices=[0, 1], help="Manual side number if not parsable from filename")
-    analyze_disk_parser.add_argument("--rpm", type=int, default=360, help="Known RPM for validation (default: 360 for these dumps)")
+    analyze_disk_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization/validation (e.g., 360 for 5.25\" HD, 300 for 3.5\"). If omitted, --profile or 360 is used.")
+    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified): 35HD/35DD=300, 525HD=360, 525DD=300")
     analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
     analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
     analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary generation (default: 0.2)")
@@ -1756,7 +1886,8 @@ def main():
     corpus_parser.add_argument("inputs", help="Directory containing runs (searched recursively for surface_map.json) or a single surface_map.json path")
     corpus_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Scan for .raw under inputs, generate surface_map.json via analyze_disk where missing before aggregating")
-    corpus_parser.add_argument("--rpm", type=int, default=360, help="Known RPM for normalization when generating missing maps (default: 360)")
+    corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps (e.g., 360 or 300). If omitted, --profile or 360 is used.")
+    corpus_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified)")
     corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
     corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
     corpus_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
