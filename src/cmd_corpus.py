@@ -49,27 +49,50 @@ def analyze_corpus(args):
                 safe = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
                 disk_dir = (run_dir / 'disks' / safe)
                 disk_dir.mkdir(parents=True, exist_ok=True)
-                # Invoke analyze_disk programmatically, directing outputs to disk_dir
-                disk_args = argparse.Namespace(
-                    input=str(d), track=None, side=None, rpm=effective_rpm,
-                    lm_host=getattr(args, 'lm_host', 'localhost:1234'),
-                    lm_model=getattr(args, 'lm_model', 'local-model'),
-                    lm_temperature=getattr(args, 'lm_temperature', 0.2),
-                    summarize=getattr(args, 'summarize', False),
-                    output_dir=str(disk_dir), summary_format='json',
-                    media_type=getattr(args, 'media_type', None),
-                    # Overlay flags propagated from corpus args
-                    format_overlay=getattr(args, 'format_overlay', False),
-                    angular_bins=getattr(args, 'angular_bins', 0),
-                    overlay_alpha=getattr(args, 'overlay_alpha', 0.8),
-                    overlay_color=getattr(args, 'overlay_color', '#ff3333'),
-                    overlay_mode=getattr(args, 'overlay_mode', 'mfm'),
-                    gcr_candidates=getattr(args, 'gcr_candidates', '10,12,8,9,11,13'),
-                    overlay_sectors_hint=getattr(args, 'overlay_sectors_hint', None),
-                )
-                # Lazy import to avoid circular dependency
-                import main as _main
-                _main.analyze_disk(disk_args)
+                # Invoke analyze_disk via subprocess to avoid import/package issues
+                import sys as _sys
+                import subprocess as _sp
+                cmd = [
+                    _sys.executable, "-m", "FloppyAI.src.main", "analyze_disk", str(d),
+                    "--rpm", str(effective_rpm),
+                    "--output-dir", str(disk_dir),
+                ]
+                # Media override
+                mt = getattr(args, 'media_type', None)
+                if mt:
+                    cmd += ["--media-type", str(mt)]
+                # LLM flags
+                if getattr(args, 'summarize', False):
+                    cmd += ["--summarize"]
+                cmd += ["--lm-host", str(getattr(args, 'lm_host', 'localhost:1234'))]
+                cmd += ["--lm-model", str(getattr(args, 'lm_model', 'local-model'))]
+                cmd += ["--lm-temperature", str(getattr(args, 'lm_temperature', 0.2))]
+                # Overlay flags propagated
+                if getattr(args, 'format_overlay', False):
+                    cmd += ["--format-overlay"]
+                ab = getattr(args, 'angular_bins', 0)
+                if ab:
+                    cmd += ["--angular-bins", str(ab)]
+                oc = getattr(args, 'overlay_color', None)
+                if oc:
+                    cmd += ["--overlay-color", str(oc)]
+                oa = getattr(args, 'overlay_alpha', None)
+                if oa is not None:
+                    cmd += ["--overlay-alpha", str(oa)]
+                om = getattr(args, 'overlay_mode', None)
+                if om:
+                    cmd += ["--overlay-mode", str(om)]
+                gc = getattr(args, 'gcr_candidates', None)
+                if gc:
+                    cmd += ["--gcr-candidates", str(gc)]
+                osh = getattr(args, 'overlay_sectors_hint', None)
+                if osh:
+                    cmd += ["--overlay-sectors-hint", str(osh)]
+                try:
+                    print("Running:", " ".join(cmd))
+                    _sp.run(cmd, check=False)
+                except Exception as _e:
+                    print(f"Failed to run analyze_disk for {d}: {_e}")
                 # Verify that surface_map.json was produced; if missing, track it
                 smap = disk_dir / 'surface_map.json'
                 if not smap.exists():

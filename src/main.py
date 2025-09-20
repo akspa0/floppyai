@@ -37,6 +37,10 @@ from cmd_stream_ops import (
     generate_dummy as generate_dummy_cmd,
     encode_data as encode_data_cmd,
 )
+try:
+    from analysis.analyze_disk import run as analyze_disk_cmd
+except Exception:
+    analyze_disk_cmd = None
 import glob
 import json
 import re
@@ -44,6 +48,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import openai
+from utils.json_io import dump_json
 
 def _json_default(o):
     try:
@@ -391,8 +396,7 @@ def analyze_corpus(args):
     }
 
     out_path = corpus_dir / 'corpus_summary.json'
-    with open(out_path, 'w') as f:
-        json.dump(corpus_summary, f, indent=2, default=_json_default)
+    dump_json(out_path, corpus_summary)
     print(f"Corpus summary saved to {out_path}")
 
     # Visualizations for corpus
@@ -675,8 +679,7 @@ def analyze_corpus(args):
                     'narrative': 'No valid density measurements found across the provided disks. Verify inputs contain surface_map.json with analysis.density_estimate_bits_per_rev populated.'
                 }
                 llm_json = corpus_dir / 'llm_corpus_summary.json'
-                with open(llm_json, 'w') as jf:
-                    json.dump(parsed, jf, indent=2, default=_json_default)
+                dump_json(llm_json, parsed)
                 llm_txt = corpus_dir / 'llm_corpus_summary.txt'
                 with open(llm_txt, 'w') as tf:
                     tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
@@ -778,8 +781,7 @@ def analyze_corpus(args):
                 }
 
             llm_json = corpus_dir / 'llm_corpus_summary.json'
-            with open(llm_json, 'w') as jf:
-                json.dump(parsed, jf, indent=2, default=_json_default)
+            dump_json(llm_json, parsed)
             llm_txt = corpus_dir / 'llm_corpus_summary.txt'
             with open(llm_txt, 'w') as tf:
                 tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
@@ -830,8 +832,7 @@ def classify_surface(args):
         'classification': results,
     }
     out_path = run_dir / 'classification.json'
-    with open(out_path, 'w') as f:
-        json.dump(out, f, indent=2, default=_json_default)
+    dump_json(out_path, out)
     print(f"Classification saved to {out_path}")
     return 0
 
@@ -1016,8 +1017,7 @@ def analyze_disk(args):
             'insights': {},
         }
         out_map = run_dir / 'surface_map.json'
-        with open(out_map, 'w') as f:
-            json.dump(surface_map, f, indent=2, default=_json_default)
+        dump_json(out_map, surface_map)
     except Exception as _e_stub:
         print(f"Warning: failed initial stub surface_map.json write: {_e_stub}")
     
@@ -1849,16 +1849,14 @@ def analyze_disk(args):
         # Persist surface map with overlay metadata for corpus discovery
         try:
             out_map = run_dir / 'surface_map.json'
-            with open(out_map, 'w') as f:
-                json.dump(surface_map, f, indent=2, default=_json_default)
+            dump_json(out_map, surface_map)
             print(f"Surface map saved to {out_map}")
         except Exception as e:
             print(f"Failed to write surface_map.json: {e}")
         # Export a focused overlay debug snapshot for easier verification
         try:
             overlay_info = surface_map.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(surface_map.get('global'), dict) else {}
-            with open(run_dir / 'overlay_debug.json', 'w') as of:
-                json.dump(overlay_info, of, indent=2, default=_json_default)
+            dump_json(run_dir / 'overlay_debug.json', overlay_info)
             print(f"Overlay debug saved to {run_dir / 'overlay_debug.json'}")
         except Exception as e:
             print(f"Failed to write overlay_debug.json: {e}")
@@ -2606,8 +2604,7 @@ def analyze_disk(args):
 
             parsed_json = _sanitize(parsed_json)
             json_path = run_dir / "llm_summary.json"
-            with open(json_path, 'w') as jf:
-                json.dump(parsed_json, jf, indent=2, allow_nan=False, default=_json_default)
+            dump_json(json_path, parsed_json, allow_nan=False)
 
             # Render text if requested or default
             summary_path = run_dir / "llm_summary.txt"
@@ -2686,8 +2683,7 @@ def plan_pool(args):
     }
 
     out_path = run_dir / 'pool_plan.json'
-    with open(out_path, 'w') as f:
-        json.dump(plan, f, indent=2, default=_json_default)
+    dump_json(out_path, plan)
     print(f"Pool plan saved to {out_path}")
     return 0
 
@@ -2854,8 +2850,7 @@ def compare_reads(args):
         'overlay_comparison': overlay_cmp,
         'common_tracks': { 'side0': common_tracks[0], 'side1': common_tracks[1] },
     }
-    with open(diff_dir / 'diff_summary.json', 'w') as f:
-        json.dump(summary, f, indent=2, default=_json_default)
+    dump_json(diff_dir / 'diff_summary.json', summary)
     print(f"Diff summary saved to {diff_dir / 'diff_summary.json'}")
     return 0
 
@@ -2937,7 +2932,7 @@ def main():
     analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
     analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
     analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive")
-    analyze_disk_parser.set_defaults(func=analyze_disk)
+    analyze_disk_parser.set_defaults(func=analyze_disk_cmd or analyze_disk)
 
     # Analyze Corpus command
     corpus_parser = subparsers.add_parser("analyze_corpus", help="Aggregate multiple surface_map.json files for a corpus summary")
