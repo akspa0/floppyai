@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="src/samples/disk1_composite_report.png">
-    <img src="src/samples/disk1_composite_report.png" alt="Sample per-disk composite report" width="400" />
+    <img src="src/samples/disk1_composite_report.png" alt="Sample per-disk composite report" width="600" />
   </a>
   <br/>
   <em>Sample per‑disk composite: flux plots, polar disk surface (both sides), density/variance by track</em>
@@ -22,7 +22,7 @@ FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnet
 2) Run corpus analysis (from the repository root)
 ```bash
 python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --rpm 360.0 --summarize \
-  --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0
+  --lm-host HOST[:PORT] --lm-model MODEL_NAME --lm-temperature 0.0
 ```
 - Tip: prefer the direct-run form `python FloppyAI/src/main.py` (module mode works too if you prefer).
 - `--generate-missing` processes each disk with `analyze_disk`.
@@ -69,23 +69,23 @@ python -m FloppyAI.src.main --help
 
 - Analyze a full disk (PC 3.5" HD with MFM overlays)
   ```bash
-  python FloppyAI/src/main.py analyze_disk .\stream_dumps\1.44\win95boot\0 \
+  python FloppyAI/src/main.py analyze_disk .\stream_dumps\example_disk \
     --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
-    --output-dir .\test_outputs\win95_0
+    --output-dir .\test_outputs\example_run
   ```
 
 - Analyze a Mac GCR disk (400K/800K) with zoned overlays
   ```bash
-  python FloppyAI/src/main.py analyze_disk .\stream_dumps\macdisk \
+  python FloppyAI/src/main.py analyze_disk .\stream_dumps\mac_example \
     --media-type 35DD --format-overlay --overlay-mode gcr \
     --gcr-candidates "12,10,8,9,11,13" --angular-bins 900 \
-    --output-dir .\test_outputs\macdisk
+    --output-dir .\test_outputs\mac_example
   ```
 
 - Compare two reads (requires each to have surface_map.json)
   ```bash
-  python FloppyAI/src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
-    --output-dir .\test_outputs\diff_win95
+  python FloppyAI/src/main.py compare_reads .\test_outputs\run_A .\test_outputs\run_B \
+    --output-dir .\test_outputs\diff_example
   ```
 
 - Build a corpus and auto-generate missing per-disk maps
@@ -181,13 +181,13 @@ Corpus behavior with overlays:
 Examples:
 ```
 # MFM (PC) overlay, prefer 18 sectors (3.5" HD)
-python -m FloppyAI.src.main analyze_disk .\streams\pcdisk --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720
+python FloppyAI/src/main.py analyze_disk .\streams\pc_disk --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720
 
 # GCR (Mac) overlay with candidates for classic 400K/800K
-python -m FloppyAI.src.main analyze_disk .\streams\macdisk --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" --angular-bins 900
+python FloppyAI/src/main.py analyze_disk .\streams\mac_disk --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" --angular-bins 900
 
 # Corpus from raw streams, generating per‑disk maps with overlays then aggregating
-python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13"
+python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13"
 ```
 
 #### Interpreting overlay visuals
@@ -232,18 +232,18 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
 
 1. **Analyze a Stream File** (Decode and visualize `.raw`):
    ```
-   python -m FloppyAI.src.main analyze <input.raw> [--output-dir]
+   python FloppyAI/src/main.py analyze <input.raw> [--output-dir]
    ```
    - Parses flux transitions, computes stats (mean interval, noise variance).
    - Detects anomalies (short/long cells, weak bits via rev inconsistencies).
    - Generates plots: <input>_intervals.png (time series), <input>_hist.png (distribution), <input>_heatmap.png (if multi-rev).
-   - Example: `python -m FloppyAI.src.main analyze ../../example_stream_data/unknown-stream00.0.raw`
+   - Example: `python FloppyAI/src/main.py analyze example_stream_data/example00.0.raw`
      - Output: Stats like "Mean Interval: 4000.50 ns", "Short Cells: 5", visualizations saved.
    - For blanks: High variance indicates surface irregularities; low anomalies = clean media.
 
 2. **Read Track from Hardware**:
    ```
-   python -m FloppyAI.src.main read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir]
+   python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir]
    ```
    - Reads track/side (e.g., 0 0) to .raw using DTC.
    - --revs: Revolutions (default 3 for better analysis).
@@ -254,7 +254,7 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
 
 3. **Write Stream to Hardware**:
    ```
-   python -m FloppyAI.src.main write <input.raw> <track> <side> [--simulate] [--output-dir]
+   python FloppyAI/src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir]
    ```
    - Writes .raw to track/side.
    - --simulate: Dry-run (logs command).
@@ -262,19 +262,19 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
 
 4. **Generate Dummy Stream** (Build custom flux for testing):
    ```
-   python -m FloppyAI.src.main generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir]
+   python FloppyAI/src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir]
    ```
    - Creates .raw with uniform intervals + noise (simulate one revolution).
    - --revs: Number of revolutions.
    - --cell: Nominal cell length ns (vary for density: shorter = higher density).
    - --analyze: Auto-analyze output.
    - --rpm: Known RPM for normalization (default 360).
-   - Example: `python -m FloppyAI.src.main generate 0 0 dummy.raw --cell 2000 --analyze`
+   - Example: `python FloppyAI/src/main.py generate 0 0 --cell 2000 --analyze`
      - Generates denser flux; analyze to see interval distribution.
 
 5. **Encode Binary Data to Custom Stream** (Prototype higher density encoding):
    ```
-   python -m FloppyAI.src.main encode <input.bin> <track> <side> [--density 1.0] [--variable] [--revs 1] [--output <output.raw>] [--write] [--simulate] [--analyze] [--rpm 360] [--output-dir]
+   python FloppyAI/src/main.py encode <input.bin> <track> <side> [--density 1.0] [--variable] [--revs 1] [--output <output.raw>] [--write] [--simulate] [--analyze] [--rpm 360] [--output-dir]
    ```
    - Encodes binary file to .raw using Manchester or variable RLL-like flux encoding.
    - --density: Scaling factor (>1.0 shortens cells for higher density; e.g., 2.0 for ~2x bits).
@@ -286,13 +286,13 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
    - --analyze: Auto-analyze generated .raw (check density estimate vs. achieved).
    - --rpm: Known RPM for normalization (default 360).
    - Outputs achieved density (bits/rev) based on input size.
-   - Example: `python -m FloppyAI.src.main encode test_data.bin 0 0 --density 2.0 --variable --rpm 360 --analyze`
+   - Example: `python FloppyAI/src/main.py encode test_data.bin 0 0 --density 2.0 --variable --rpm 360 --analyze`
      - Encodes 1KB data at 2x density with variable cells; prints ~8192 bits/rev (vs. standard ~4000); analyzes for noise/readability.
    - For density testing: Compare bits/rev in output to standard (analyze dummy at density=1.0); higher = success if low anomalies.
 
 6. **Decode Custom Stream** (Recover binary data from encoded .raw):
    ```
-   python -m FloppyAI.src.main decode <input.raw> [--density 1.0] [--variable] [--revs 1] [--output <output.bin>] [--expected <original.bin>] [--rpm 360] [--output-dir]
+   python FloppyAI/src/main.py decode <input.raw> [--density 1.0] [--variable] [--revs 1] [--output <output.bin>] [--expected <original.bin>] [--rpm 360] [--output-dir]
    ```
    - Decodes flux to binary using matching parameters.
    - --density: Expected density used in encoding.
@@ -301,15 +301,15 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
    - --output: Custom .bin path.
    - --expected: Original .bin for verification (reports % match, byte errors).
    - --rpm: Known RPM for normalization (default 360).
-   - Example: `python -m FloppyAI.src.main decode test_encoded.raw --density 2.0 --variable --rpm 360 --expected test_data.bin`
+   - Example: `python FloppyAI/src/main.py decode test_encoded.raw --density 2.0 --variable --rpm 360 --expected test_data.bin`
      - Outputs test_decoded.bin; verifies 100% recovery for all-zero data (perfect for blanks).
 
 7. **Analyze Disk Surface** (Batch process streams for full disk map):
    ```
-   python -m FloppyAI.src.main analyze_disk [input] [--track N] [--side 0|1] [--rpm 360] [--output-dir] [--summarize]
+   python FloppyAI/src/main.py analyze_disk [input] [--track N] [--side 0|1] [--rpm 360] [--output-dir] [--summarize]
    ```
-   - input: Optional directory or single .raw file (default: ../example_stream_data/). Globs all *.raw if dir; auto-batches parent dir if single numbered file and siblings exist.
-   - Parses track/side from filename ending in \d+\.\d+\.raw (e.g., Goofy00.0.raw → track 0 side 0); handles concatenated prefixes (e.g., blank180.1.raw → track 80 side 1).
+   - input: Optional directory or single .raw file (default: example_stream_data/). Globs all *.raw if dir; auto-batches parent dir if single numbered file and siblings exist.
+   - Parses track/side from filename ending in \d+\.\d+\.raw (e.g., MyDisk00.0.raw → track 0 side 0); handles concatenated prefixes (e.g., prefix180.1.raw → track 80 side 1).
    - Filters to tracks 0-83, sides 0-1; processes in order (00.0, 00.1, ..., 83.1), logging found vs expected (up to 168 files).
    - Use --track/--side for manual override if unparsable (applies to all files if no pattern).
    - --rpm: Known RPM for normalization/validation (default 360; scales partial reads to full rev, computes drift_pct ~0-5%, normalized densities).
@@ -325,34 +325,30 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
      - `<label>_composite_report.png` (single composite image)
    - `<label>` is derived from the input stream filename or folder name.
    - Examples:
-     - Default batch: `python -m FloppyAI.src.main analyze_disk` (processes example_stream_data/)
-     - Full disk dir: `python -m FloppyAI.src.main analyze_disk .\stream_dumps\GoofyExpress\goofy_express\kryoflux_stream`
-     - With normalization/summary: `python -m FloppyAI.src.main analyze_disk [path] --rpm 360 --summarize --lm-host localhost --lm-model llama3`
+     - Default batch: `python FloppyAI/src/main.py analyze_disk`
+     - Full disk dir: `python FloppyAI/src/main.py analyze_disk .\stream_dumps\<disk_label>\kryoflux_stream`
+     - With normalization/summary: `python FloppyAI/src/main.py analyze_disk [path] --rpm 360 --summarize --lm-host HOST[:PORT] --lm-model MODEL_NAME`
 
 8. **Compare Reads** (Diff multiple reads of the same disk):
-   ```
-   python -m FloppyAI.src.main compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
-   ```
-   - Each item can be a surface_map.json or a directory containing one. Ensure you ran `analyze_disk` for each read first.
-   - Outputs: `diff/diff_summary.json`, `diff/diff_densities.csv`
-   - Example:
-     - `python -m FloppyAI.src.main compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 --output-dir .\test_outputs\diff_win95`
+  ```
+  python FloppyAI/src/main.py compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
+  ```
+  - Each item can be a surface_map.json or a directory containing one. Ensure you ran `analyze_disk` for each read first.
+  - Outputs: `diff/diff_summary.json`, `diff/diff_densities.csv`
+  - Example:
+    - `python FloppyAI/src/main.py compare_reads .\test_outputs\run_A .\test_outputs\run_B --output-dir .\test_outputs\diff_example`
 
 9. **Classify Surface** (Blank-like vs written-like labels):
    ```
-   python -m FloppyAI.src.main classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
+   python FloppyAI/src/main.py classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
    ```
    - Writes `classification.json` with labels per track/side.
 
 10. **Plan Pool** (Select top-quality tracks for a dense bit pool):
    ```
-   python -m FloppyAI.src.main plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
+   python FloppyAI/src/main.py plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
    ```
    - Writes `pool_plan.json` with selected tracks per side.
-       - Outputs: JSON with protection on side 1 (score ~0.35, high variance/anomalies), heatmap showing ~500 bits/rev vs. 350 on side 0, summary like "Learned: Sparse fluxes for copy protection; pack more with density=1.8".
-     - For protected disks: Detects schemes (e.g., weak bits via short_cells >40%, zoned in outer tracks).
-   - Use for full disk: Maps surface, identifies coercivity/protection variations for adaptive encoding (e.g., higher density on clean zones).
-   - Note: For single-file focus with per-file viz, use 'analyze'. Binary files like test_data.bin are for encode/decode, not flux analysis.
 
 ## Tips
 - Use `--rpm 360` (or `--profile 525HD`) to normalize stats for 1.2MB 5.25" drives; use `--rpm 300` (or `--profile 35HD/35DD`) for 3.5".
@@ -365,4 +361,4 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --m
 - LLM Enhancements: Customize prompts or integrate more models via LM Studio; tune per‑disk narrative schemas as needed.
 - See [`docs/roadmap.md`](docs/roadmap.md) for the roadmap.
 
-For issues, ensure running from src/ or use `python -m FloppyAI.src.main` from FloppyAI/.
+For issues, ensure running from the repository root and use `python FloppyAI/src/main.py` (or module mode as an alternative).
