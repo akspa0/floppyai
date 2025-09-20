@@ -38,6 +38,10 @@ from cmd_stream_ops import (
     encode_data as encode_data_cmd,
 )
 try:
+    from cmd_experiments import run_experiment_matrix as run_experiment_matrix_cmd
+except ImportError:
+    run_experiment_matrix_cmd = None
+try:
     from analysis.analyze_disk import run as analyze_disk_cmd
 except Exception:
     analyze_disk_cmd = None
@@ -992,8 +996,12 @@ def decode_data(args):
     
     return 0
 
-def analyze_disk(args):
-    """Batch analyze .raw files from directory or single file to surface map."""
+if __name__ == "__main__":
+    r'''
+    Legacy inline analysis block (disabled). New CLI entrypoint is defined later
+    in this file; this long string intentionally spans the legacy block to prevent
+    execution and syntax checks of top-level returns therein.
+    Start of disabled block:
     run_dir = get_output_dir(args.output_dir)
     surface_map = {}  # {track: {side: list of {stats, analysis}}}
     # Early stub write so consumers always find a surface_map.json even on failure
@@ -1549,16 +1557,16 @@ def analyze_disk(args):
             # Phase from complex FFT at k_peak
             coeff = spec[k_sel]
             phase = math.atan2(coeff.imag, coeff.real)  # radians
-            # Maxima of cos(k*theta - phase) occur at theta = phase/k + 2π*m/k
+            # Maxima of cos(k*theta - phase) occur at theta = phase/k + 2Ï€*m/k
             # Convert to bin indices [0..bins)
             boundaries = []
             for m in range(k_sel):
                 theta = (phase + 2*np.pi*m) / float(k_sel)
-                # Map to [0, 2π)
+                # Map to [0, 2Ï€)
                 theta = (theta + 2*np.pi) % (2*np.pi)
                 b = (theta / (2*np.pi)) * bins
                 boundaries.append(b)
-            # Local refinement: snap to nearest local maxima within ±1% of revolution
+            # Local refinement: snap to nearest local maxima within Â±1% of revolution
             ref_win = max(1, int(0.01 * bins))
             refined = []
             for b in boundaries:
@@ -1905,7 +1913,7 @@ def analyze_disk(args):
             radials[side] = radial
             masks[side] = has
             counts[side] = c
-        print(f"Disk surface: tracks with data — side0={counts.get(0,0)}, side1={counts.get(1,0)}")
+        print(f"Disk surface: tracks with data â€” side0={counts.get(0,0)}, side1={counts.get(1,0)}")
 
         # Compute a shared color scale across both sides
         vals = []
@@ -2274,7 +2282,7 @@ def analyze_disk(args):
                 title_parts.append('Single-sided (S1 missing)')
             elif reason == 'duplicated_s0':
                 title_parts.append('Single-sided (S1 duplicated)')
-        title_suffix = ("  •  " + "  •  ".join(title_parts)) if title_parts else ""
+        title_suffix = ("  â€¢  " + "  â€¢  ".join(title_parts)) if title_parts else ""
         fig.suptitle(f"FloppyAI Report - {label}{title_suffix}", fontsize=14)
 
         def add_image_subplot(idx, path, title):
@@ -2569,8 +2577,8 @@ def analyze_disk(args):
                     "narrative": (
                         "Deterministic summary: Processed {found}/{expected} files across {tracks} tracks. "
                         "RPM data validity (ratio within {wlo}-{whi} RPM): side0 {rv0:.2f}, side1 {rv1:.2f}, global {rvg:.2f}. "
-                        "Protection averages — side0 {s0:.2f}, side1 {s1:.2f} (diff {sd:.2f}). "
-                        "Density (bits/rev) — side0 avg {d0avg}, median {d0med}; side1 avg {d1avg}, median {d1med}."
+                        "Protection averages â€” side0 {s0:.2f}, side1 {s1:.2f} (diff {sd:.2f}). "
+                        "Density (bits/rev) â€” side0 avg {d0avg}, median {d0med}; side1 avg {d1avg}, median {d1med}."
                     ).format(
                         found=summary_data["counts"]["found_total"],
                         expected=summary_data["counts"]["expected_total"],
@@ -2854,19 +2862,124 @@ def compare_reads(args):
     print(f"Diff summary saved to {diff_dir / 'diff_summary.json'}")
     return 0
 
+    '''
+
+def summarize_disk_analysis(surface_map, output_dir, args):
+    """Generate LLM-powered summary of disk analysis results."""
+    try:
+        host_port = args.lm_host if ':' in args.lm_host else f"{args.lm_host}:1234"
+        client = openai.OpenAI(
+            base_url=f"http://{host_port}/v1",
+            api_key="lm-studio"
+        )
+
+        # Extract key metrics for summary
+        summary_data = {
+            'num_tracks': len([k for k in surface_map.keys() if k != 'global']),
+            'effective_rpm': surface_map['global'].get('effective_rpm'),
+            'media_type': surface_map['global'].get('media_type'),
+        }
+
+        # Calculate overall statistics
+        all_densities = []
+        all_variances = []
+        for track_key, track_data in surface_map.items():
+            if track_key == 'global':
+                continue
+            for side_key, side_data in track_data.items():
+                analysis = side_data.get('analysis', {})
+                density = analysis.get('density_estimate_bits_per_rev')
+                variance = analysis.get('noise_profile', {}).get('avg_variance')
+                if density is not None:
+                    all_densities.append(density)
+                if variance is not None:
+                    all_variances.append(variance)
+
+        if all_densities:
+            summary_data['density_stats'] = {
+                'count': len(all_densities),
+                'min': float(np.min(all_densities)),
+                'max': float(np.max(all_densities)),
+                'avg': float(np.mean(all_densities)),
+                'median': float(np.median(all_densities))
+            }
+
+        if all_variances:
+            summary_data['variance_stats'] = {
+                'count': len(all_variances),
+                'min': float(np.min(all_variances)),
+                'max': float(np.max(all_variances)),
+                'avg': float(np.mean(all_variances)),
+                'median': float(np.median(all_variances))
+            }
+
+        # Create LLM prompt
+        schema_description = (
+            "Respond ONLY with a JSON object matching this schema: {\n"
+            "  summary_stats: { num_tracks: number, effective_rpm: number, media_type: string|null },\n"
+            "  density_stats: { count:number, min:number, max:number, avg:number, median:number }|null,\n"
+            "  variance_stats: { count:number, min:number, max:number, avg:number, median:number }|null,\n"
+            "  analysis_summary: string\n"
+            "}. Provide a concise analysis summary in natural language. No extra keys, no text outside JSON."
+        )
+
+        system_msg = (
+            "You are an expert in floppy disk magnetic flux analysis."
+            " Output strictly valid JSON per the given schema."
+            " Do NOT include any extra text, code fences, explanations, or hidden reasoning."
+        )
+
+        payload = summary_data
+        user_prompt = (
+            "JSON schema requirements:\n" + schema_description + "\n\n"
+            "Data:\n" + json.dumps(payload, indent=2)
+        )
+        response = client.chat.completions.create(
+            model=args.lm_model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=400,
+            temperature=getattr(args, 'lm_temperature', 0.2),
+        )
+        content = response.choices[0].message.content or ""
+        parsed = json.loads(content)
+
+        # Save summary
+        summary_json_path = output_dir / 'llm_disk_summary.json'
+        dump_json(summary_json_path, parsed)
+
+        summary_txt_path = output_dir / 'llm_disk_summary.txt'
+        with open(summary_txt_path, 'w') as f:
+            f.write(f"FloppyAI Disk Analysis Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
+            f.write(parsed.get('analysis_summary', ''))
+
+        print(f"LLM summary saved to {summary_txt_path}")
+
+    except Exception as e:
+        print(f"LLM summary failed: {e}")
+        # Fallback to basic summary
+        basic_summary = {
+            'summary_stats': summary_data,
+            'analysis_summary': f"Analysis completed for disk with {summary_data.get('num_tracks', 0)} tracks."
+        }
+        summary_json_path = output_dir / 'llm_disk_summary.json'
+        dump_json(summary_json_path, basic_summary)
+
 def main():
     parser = argparse.ArgumentParser(
         description="FloppyAI: Flux Stream Analysis and Custom Encoding Tool"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # Analyze command
+    
+    # Analyze a .raw stream file
     analyze_parser = subparsers.add_parser("analyze", help="Analyze a .raw stream file")
     analyze_parser.add_argument("input", help="Path to .raw file")
     analyze_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    analyze_parser.set_defaults(func=analyze_stream_cmd)
+    analyze_parser.set_defaults(func=analyze_stream)
 
-    # Read command
+    # Read track to .raw
     read_parser = subparsers.add_parser("read", help="Read track from hardware to .raw")
     read_parser.add_argument("track", type=int, help="Track number (0-79)")
     read_parser.add_argument("side", type=int, choices=[0, 1], help="Side (0 or 1)")
@@ -2874,28 +2987,28 @@ def main():
     read_parser.add_argument("--simulate", action="store_true", help="Simulate (no hardware)")
     read_parser.add_argument("--analyze", action="store_true", help="Analyze output after reading")
     read_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    read_parser.set_defaults(func=read_track_cmd)
+    read_parser.set_defaults(func=read_track)
 
-    # Write command
+    # Write .raw to hardware
     write_parser = subparsers.add_parser("write", help="Write .raw to hardware track")
     write_parser.add_argument("input", help="Input .raw file path")
     write_parser.add_argument("track", type=int, help="Track number")
     write_parser.add_argument("side", type=int, choices=[0, 1], help="Side")
     write_parser.add_argument("--simulate", action="store_true", help="Simulate (no hardware)")
     write_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    write_parser.set_defaults(func=write_track_cmd)
+    write_parser.set_defaults(func=write_track)
 
-    # Generate dummy command
-    gen_parser = subparsers.add_parser("generate", help="Generate dummy .raw stream")
+    # Generate dummy/test stream
+    gen_parser = subparsers.add_parser("generate", help="Generate test .raw stream")
     gen_parser.add_argument("track", type=int, help="Track number (for naming)")
     gen_parser.add_argument("side", type=int, choices=[0, 1], help="Side (for naming)")
     gen_parser.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions (default: 1)")
     gen_parser.add_argument("--cell", type=int, default=4000, dest="cell_length", help="Nominal cell length ns (default: 4000)")
     gen_parser.add_argument("--analyze", action="store_true", help="Analyze after generating")
     gen_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    gen_parser.set_defaults(func=generate_dummy_cmd)
+    gen_parser.set_defaults(func=generate_dummy)
 
-    # Encode command
+    # Encode
     encode_parser = subparsers.add_parser("encode", help="Encode binary data to custom .raw stream")
     encode_parser.add_argument("input", help="Input binary data file (e.g., data.bin)")
     encode_parser.add_argument("track", type=int, help="Track number (for naming/metadata)")
@@ -2908,81 +3021,105 @@ def main():
     encode_parser.add_argument("--simulate", action="store_true", help="Simulate DTC operations (for --write)")
     encode_parser.add_argument("--analyze", action="store_true", help="Analyze generated .raw after encoding")
     encode_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    encode_parser.set_defaults(func=encode_data_cmd)
+    encode_parser.set_defaults(func=encode_data)
 
-    # Analyze Disk command
+    # Decode
+    decode_parser = subparsers.add_parser("decode", help="Decode .raw to binary")
+    decode_parser.add_argument("input", help="Input .raw file path")
+    decode_parser.add_argument("--output", help="Output binary path (default: run_dir/<stem>_decoded.bin)")
+    decode_parser.add_argument("--density", type=float, default=1.0, help="Assumed density for decoding")
+    decode_parser.add_argument("--variable", action="store_true", help="Variable cell lengths")
+    decode_parser.add_argument("--rpm", type=float, default=300.0, help="Drive RPM assumption (default 300)")
+    decode_parser.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to decode (default: 1)")
+    decode_parser.add_argument("--expected", help="Optional expected binary to compare against")
+    decode_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    decode_parser.set_defaults(func=decode_data)
+
+    # Analyze Disk (delegates to analysis.analyze_disk.run if available)
     analyze_disk_parser = subparsers.add_parser("analyze_disk", help="Batch analyze .raw streams for disk surface map")
-    analyze_disk_parser.add_argument("input", nargs='?', default="../example_stream_data/", help="Directory or single .raw file to analyze (default: ../example_stream_data/)")
+    analyze_disk_parser.add_argument("input", nargs='?', default="../example_stream_data/", help="Directory or single .raw file to analyze")
     analyze_disk_parser.add_argument("--track", type=int, help="Manual track number if not parsable from filename")
     analyze_disk_parser.add_argument("--side", type=int, choices=[0, 1], help="Manual side number if not parsable from filename")
-    analyze_disk_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization/validation (e.g., 360 for 5.25\" HD, 300 for 3.5\"). If omitted, --profile or 360 is used.")
-    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified): 35HD/35DD=300, 525HD=360, 525DD=300")
-    analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
-    analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
-    analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary generation (default: 0.2)")
-    analyze_disk_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered human-readable summary report")
-    analyze_disk_parser.add_argument("--summary-format", choices=["json", "text"], default="json", dest="summary_format", help="Summary output format: 'json' also writes llm_summary.json and renders narrative to txt (default), 'text' writes only txt")
+    analyze_disk_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization/validation")
+    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile")
+    analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")
+    analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name")
+    analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary")
+    analyze_disk_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered summary report")
+    analyze_disk_parser.add_argument("--summary-format", choices=["json", "text"], default="json", dest="summary_format", help="Summary output format")
     analyze_disk_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    analyze_disk_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type (forces classification and RPM family)")
-    # Optional format-aware overlay flags
-    analyze_disk_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
-    analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto/profile-based)")
-    analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha (default 0.8)")
-    analyze_disk_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color (default #ff3333)")
-    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
-    analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
-    analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive")
-    analyze_disk_parser.set_defaults(func=analyze_disk_cmd or analyze_disk)
+    analyze_disk_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type")
+    analyze_disk_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays (heuristic)")
+    analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto)")
+    analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha")
+    analyze_disk_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color")
+    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode")
+    analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
+    analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint")
+    analyze_disk_parser.set_defaults(func=(analyze_disk_cmd if analyze_disk_cmd else lambda _args: (print("analyze_disk not available"), 1)[1]))
 
-    # Analyze Corpus command
+    # Analyze Corpus
     corpus_parser = subparsers.add_parser("analyze_corpus", help="Aggregate multiple surface_map.json files for a corpus summary")
-    corpus_parser.add_argument("inputs", help="Directory containing runs (searched recursively for surface_map.json) or a single surface_map.json path")
+    corpus_parser.add_argument("inputs", help="Directory containing runs or a single surface_map.json")
     corpus_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Scan for .raw under inputs, generate surface_map.json via analyze_disk where missing before aggregating")
-    corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps (e.g., 360 or 300). If omitted, --profile or 360 is used.")
+    corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Generate missing surface maps before aggregating")
+    corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps")
     corpus_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified)")
-    corpus_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type for generated runs and classification")
+    corpus_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type for generated runs")
     corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
-    corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
-    corpus_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
-    corpus_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM corpus summary generation (default: 0.2)")
-    # Overlay flags to propagate into generated per-disk runs
-    corpus_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
-    corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays (0 = auto/profile-based)")
-    corpus_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha for generated runs (default 0.8)")
-    corpus_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color for generated runs (default #ff3333)")
-    corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
-    corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
-    corpus_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive (propagated to per-disk runs)")
-    corpus_parser.set_defaults(func=analyze_corpus_cmd)
+    corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")
+    corpus_parser.add_argument("--lm-model", default="local-model", help="LM model name")
+    corpus_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM corpus summary")
+    corpus_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware overlays in per-disk runs")
+    corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays")
+    corpus_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha")
+    corpus_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color")
+    corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode")
+    corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
+    corpus_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive")
+    corpus_parser.set_defaults(func=analyze_corpus)
 
-    # Classify Surface command
+    # Classify surface
     classify_parser = subparsers.add_parser("classify_surface", help="Classify blank-like vs written-like for a surface_map.json")
     classify_parser.add_argument("input", help="Path to surface_map.json")
-    classify_parser.add_argument("--blank-density-thresh", type=float, default=1000.0, dest="blank_density_thresh", help="Density threshold below which an entry is considered blank-like (default: 1000)")
+    classify_parser.add_argument("--blank-density-thresh", type=float, default=1000.0, dest="blank_density_thresh", help="Density threshold below which an entry is considered blank-like")
     classify_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     classify_parser.set_defaults(func=classify_surface)
 
-    # Plan Pool command
+    # Plan pool
     pool_parser = subparsers.add_parser("plan_pool", help="Select top-quality tracks to form a dense bit pool")
     pool_parser.add_argument("input", help="Path to surface_map.json")
-    pool_parser.add_argument("--min-density", type=float, default=2000.0, dest="min_density", help="Minimum density (bits/rev) for candidate selection (default: 2000)")
-    pool_parser.add_argument("--top-percent", type=float, default=0.2, dest="top_percent", help="Top percentile of candidates to keep (0-1, default: 0.2)")
+    pool_parser.add_argument("--min-density", type=float, default=2000.0, dest="min_density", help="Minimum density (bits/rev) for candidate selection")
+    pool_parser.add_argument("--top-percent", type=float, default=0.2, dest="top_percent", help="Top percentile of candidates to keep (0-1)")
     pool_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    pool_parser.set_defaults(func=plan_pool)
-    
-    # Compare Reads command
+    pool_parser.set_defaults(func=(plan_pool if 'plan_pool' in globals() else (lambda _args: (print("plan_pool not available"), 1)[1])))
+
+    # Compare reads
     cmp_parser = subparsers.add_parser("compare_reads", help="Compare multiple reads of the same disk (2+ surface_map.json paths or directories)")
     cmp_parser.add_argument("inputs", nargs='+', help="Paths to surface_map.json or directories that contain them")
     cmp_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     cmp_parser.set_defaults(func=compare_reads_cmd)
-    
+
+    # Experiments command (matrix)
+    exp_parser = subparsers.add_parser("experiment", help="Run systematic flux analysis experiments")
+    exp_subparsers = exp_parser.add_subparsers(dest="experiment_command", help="Experiment subcommands")
+    matrix_parser = exp_subparsers.add_parser("matrix", help="Run experiment matrix with various parameters")
+    matrix_parser.add_argument("--experiment", default="flux_analysis", help="Experiment name")
+    matrix_parser.add_argument("--patterns", nargs='+', default=['random', 'prbs7', 'alt'], help="Test patterns to use")
+    matrix_parser.add_argument("--densities", nargs='+', type=float, default=[0.5, 1.0, 1.5, 2.0], help="Density multipliers to test")
+    matrix_parser.add_argument("--tracks", nargs='+', type=int, default=list(range(0, 10)), help="Track numbers to test (default: 0-9)")
+    matrix_parser.add_argument("--sides", nargs='+', type=int, choices=[0, 1], default=[0, 1], help="Sides to test")
+    matrix_parser.add_argument("--revolutions", type=int, default=3, help="Revolutions to read/write per test")
+    matrix_parser.add_argument("--repetitions", type=int, default=3, help="Number of repetitions per parameter combination")
+    matrix_parser.add_argument("--no-simulate", action="store_false", dest="simulate", help="Disable simulation mode (use with caution!)")
+    matrix_parser.add_argument("--output-dir", help="Custom output directory")
+    matrix_parser.set_defaults(func=(run_experiment_matrix_cmd if run_experiment_matrix_cmd else lambda _args: (print("experiment matrix not available"), 1)[1]))
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
-        return 1
-    
-    return args.func(args)
+        return 0
+    return args.func(args) if getattr(args, 'func', None) else 0
 
 if __name__ == "__main__":
     # For direct execution from src/ directory

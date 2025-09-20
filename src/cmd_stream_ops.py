@@ -1,5 +1,7 @@
 import argparse
 import os
+import random
+import numpy as np
 from pathlib import Path
 
 from flux_analyzer import FluxAnalyzer
@@ -85,22 +87,120 @@ def write_track(args):
     return 0 if success else 1
 
 
+def _generate_pattern_data(pattern: str, revolutions: int, cell_length: int, density: float = 1.0, seed: int = None) -> np.ndarray:
+    """Generate flux data for different test patterns."""
+    if seed is not None:
+        np.random.seed(seed)
+
+    # Base cell length adjusted by density
+    base_cell = int(cell_length / density)
+    min_cell = int(base_cell * 0.5)  # 50% minimum
+    max_cell = int(base_cell * 2.0)  # 200% maximum
+
+    # Generate multiple revolutions of data
+    all_fluxes = []
+
+    for rev in range(revolutions):
+        if pattern == 'random':
+            # Random flux intervals
+            rev_fluxes = np.random.randint(min_cell, max_cell + 1, 1000)
+
+        elif pattern == 'prbs7':
+            # PRBS7 pattern - pseudo-random binary sequence
+            # Simple LFSR implementation for 7-bit PRBS
+            lfsr = 0b1000000 if rev == 0 else ((np.random.randint(0, 127) & 0b1111111) | 0b1000000)
+            rev_fluxes = []
+            for _ in range(1000):
+                bit = lfsr & 1
+                lfsr = (lfsr >> 1) | ((bit ^ ((lfsr >> 1) & 1)) << 6)
+                cell_len = base_cell if bit == 0 else int(base_cell * 1.5)
+                rev_fluxes.append(max(min_cell, min(max_cell, cell_len)))
+
+        elif pattern == 'alt':
+            # Alternating pattern
+            rev_fluxes = []
+            use_long = True
+            for _ in range(1000):
+                cell_len = int(base_cell * 1.5) if use_long else base_cell
+                rev_fluxes.append(max(min_cell, min(max_cell, cell_len)))
+                use_long = not use_long
+
+        elif pattern == 'zeros':
+            # All zeros pattern (long cells)
+            rev_fluxes = np.full(1000, max_cell)
+
+        elif pattern == 'ones':
+            # All ones pattern (short cells)
+            rev_fluxes = np.full(1000, min_cell)
+
+        elif pattern == 'sweep':
+            # Frequency sweep pattern
+            rev_fluxes = []
+            for i in range(1000):
+                # Create a sweep from min to max cell length
+                progress = i / 999.0
+                cell_len = int(min_cell + (max_cell - min_cell) * (0.5 + 0.5 * np.sin(progress * 2 * np.pi)))
+                rev_fluxes.append(cell_len)
+
+        else:
+            # Default to random pattern
+            rev_fluxes = np.random.randint(min_cell, max_cell + 1, 1000)
+
+        all_fluxes.extend(rev_fluxes)
+
+    return np.array(all_fluxes, dtype=np.uint32)
+
+
 def generate_dummy(args):
-    """Generate a dummy stream for testing custom flux."""
+    """Generate a test stream with various patterns for experiments."""
     run_dir = get_output_dir(args.output_dir)
-    output_raw = str(run_dir / f"generated_track_{args.track}_{args.side}.raw")
-    wrapper = DTCWrapper(simulation_mode=True)  # Always simulate for generate
-    wrapper.generate_dummy_stream(
-        track=args.track,
-        side=args.side,
-        output_raw_path=output_raw,
+
+    # Get pattern from args or use default
+    pattern = getattr(args, 'pattern', 'random')
+    seed = getattr(args, 'seed', None)
+
+    # Generate filename
+    safe_pattern = pattern.replace('/', '_')
+    filename = f"generated_{safe_pattern}_t{args.track}_s{args.side}.raw"
+    if seed is not None:
+        filename = f"generated_{safe_pattern}_s{seed}_t{args.track}_s{args.side}.raw"
+
+    output_raw = str(run_dir / filename)
+
+    # Generate flux data based on pattern
+    flux_data = _generate_pattern_data(
+        pattern=pattern,
         revolutions=args.revolutions,
-        cell_length_ns=args.cell_length
+        cell_length=args.cell_length,
+        density=getattr(args, 'density', 1.0),
+        seed=seed
     )
-    print(f"Generated saved to {output_raw}")
-    # Analyze the dummy
+
+    # Create a simple .raw file format
+    # In a real implementation, this would use the proper KryoFlux format
+    # For now, create a basic binary format with flux intervals
+    with open(output_raw, 'wb') as f:
+        # Write header (simple format)
+        f.write(b'FLUX')  # Magic bytes
+        f.write(np.uint32(len(flux_data)))  # Number of intervals
+        f.write(np.uint32(args.revolutions))  # Number of revolutions
+
+        # Write flux data
+        flux_data.astype(np.uint32).tobytes()
+        f.write(flux_data.tobytes())
+
+    print(f"Generated pattern '{pattern}' saved to {output_raw}")
+    print(f"Pattern: {pattern}")
+    print(f"Intervals: {len(flux_data)}")
+    print(f"Revolutions: {args.revolutions}")
+    print(f"Cell length: {args.cell_length} ns")
+    print(f"Average interval: {np.mean(flux_data):.2f} ns")
+    print(f"Std deviation: {np.std(flux_data):.2f} ns")
+
+    # Analyze the generated pattern
     if getattr(args, 'analyze', False):
         analyze_stream(argparse.Namespace(input=output_raw, output_dir=run_dir))
+
     return 0
 
 
