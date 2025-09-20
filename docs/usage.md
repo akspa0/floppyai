@@ -1,11 +1,17 @@
 # FloppyAI CLI Usage Guide
 
-This guide shows how to run FloppyAI from the repository root using Python's module invocation and includes practical examples for all commands.
+This guide shows how to run FloppyAI directly from the repository root using the main script, and includes practical examples for all commands.
 
 ## Invocation
 
 - Always run from the repository root (the folder that contains `FloppyAI/`).
-- Use Python's module syntax so the package and subcommands resolve correctly:
+- Preferred: direct-run the main script
+
+```bash
+python FloppyAI/src/main.py --help
+```
+
+- Alternate: module syntax also works
 
 ```bash
 python -m FloppyAI.src.main --help
@@ -33,7 +39,7 @@ python -m FloppyAI.src.main --help
 Parse a single KryoFlux `.raw` and generate basic statistics and plots.
 
 ```bash
-python -m FloppyAI.src.main analyze path\to\file.raw --output-dir .\test_outputs\single
+python FloppyAI/src/main.py analyze path\to\file.raw --output-dir .\test_outputs\single
 ```
 
 Outputs: `<stem>_intervals.png`, `<stem>_hist.png`, and `<stem>_heatmap.png` (if multi‑rev).
@@ -41,7 +47,7 @@ Outputs: `<stem>_intervals.png`, `<stem>_hist.png`, and `<stem>_heatmap.png` (if
 ### 2) read — capture a track/side
 
 ```bash
-python -m FloppyAI.src.main read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir DIR]
+python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir DIR]
 ```
 
 - `--simulate` avoids real hardware access
@@ -50,13 +56,13 @@ python -m FloppyAI.src.main read <track> <side> [--revs 3] [--simulate] [--analy
 ### 3) write — write a `.raw` to hardware
 
 ```bash
-python -m FloppyAI.src.main write <input.raw> <track> <side> [--simulate] [--output-dir DIR]
+python FloppyAI/src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir DIR]
 ```
 
 ### 4) generate — synthetic stream for testing
 
 ```bash
-python -m FloppyAI.src.main generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir DIR]
+python FloppyAI/src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir DIR]
 ```
 
 - Increase `--revs` to fill more revolutions
@@ -65,14 +71,14 @@ python -m FloppyAI.src.main generate <track> <side> [--revs 1] [--cell 4000] [--
 ### 5) encode — binary → .raw
 
 ```bash
-python -m FloppyAI.src.main encode <input.bin> <track> <side> \
+python FloppyAI/src/main.py encode <input.bin> <track> <side> \
   [--density 1.0] [--variable] [--revs 1] [--output OUT.raw] [--write] [--simulate] [--analyze] [--output-dir DIR]
 ```
 
 ### 6) decode — recover binary data from `.raw`
 
 ```bash
-python -m FloppyAI.src.main decode <input.raw> \
+python FloppyAI/src/main.py decode <input.raw> \
   [--density 1.0] [--variable] [--revs 1] [--output out.bin] [--expected orig.bin] [--output-dir DIR]
 ```
 
@@ -83,7 +89,7 @@ python -m FloppyAI.src.main decode <input.raw> \
 ### 7) analyze_disk — build a full surface map
 
 ```bash
-python -m FloppyAI.src.main analyze_disk <dir_or_file> \
+python FloppyAI/src/main.py analyze_disk <dir_or_file> \
   [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--media-type 35HD|35DD|525HD|525DD] \
   [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] \
   [--gcr-candidates CSV] [--overlay-sectors-hint INT] \
@@ -102,7 +108,7 @@ Outputs include `surface_map.json`, `overlay_debug.json`, composite and surface 
 ### 8) analyze_corpus — aggregate many maps
 
 ```bash
-python -m FloppyAI.src.main analyze_corpus <root_or_map.json> \
+python FloppyAI/src/main.py analyze_corpus <root_or_map.json> \
   [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--media-type 35HD|35DD|525HD|525DD] \
   [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] [--gcr-candidates CSV] [--overlay-sectors-hint INT] \
   [--overlay-alpha F] [--overlay-color HEX] \
@@ -116,7 +122,7 @@ python -m FloppyAI.src.main analyze_corpus <root_or_map.json> \
 ### 9) compare_reads — compare multiple reads of the same disk
 
 ```bash
-python -m FloppyAI.src.main compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
+python FloppyAI/src/main.py compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
 ```
 
 - Each argument may be a `surface_map.json` path or a directory containing it
@@ -125,13 +131,13 @@ python -m FloppyAI.src.main compare_reads <path_or_dir1> <path_or_dir2> [<...>] 
 ### 10) classify_surface — quick blank-like vs written-like
 
 ```bash
-python -m FloppyAI.src.main classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
+python FloppyAI/src/main.py classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
 ```
 
 ### 11) plan_pool — select top‑quality tracks as a bit pool
 
 ```bash
-python -m FloppyAI.src.main plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
+python FloppyAI/src/main.py plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
 ```
 
 ---

@@ -45,16 +45,25 @@ This document captures architecture, design decisions, and recurring patterns us
   - LLM JSON is validated/coerced; a text narrative is rendered to `.txt`.
 - Overlays:
   - Controlled via `--format-overlay`, `--overlay-mode {mfm,gcr,auto}`, `--angular-bins`, `--overlay-sectors-hint`, `--gcr-candidates`, `--overlay-color`, `--overlay-alpha`.
-  - Overlay metadata lives under `global.insights.overlay` and per-track overlay blocks.
-
-## CLI & Subprocess Rules
+  - Experiment patterns:
+  - `random`: Random flux intervals within density bounds
+  - `prbs7`: Pseudo-random binary sequence using 7-bit LFSR
+  - `alt`: Alternating long/short cell pattern
+  - `zeros`: All-zeros pattern (long cells)
+  - `ones`: All-ones pattern (short cells)
+  - `sweep`: Frequency sweep pattern across cell length range
+- Pattern generation includes reproducible seeding via `--seed` parameter.
+- Density scaling via `--density` multiplier affects base cell length.
 
 - The CLI sometimes shells out to `python -m FloppyAI.src.main ...` (e.g., corpus generating missing maps):
   - Set subprocess CWD to the repo root for reliable module resolution.
   - Prefer internal calls where possible to avoid environment skew; use subprocess as a fallback for isolation.
+- New experiment subcommand uses subprocess orchestration: `python -m FloppyAI.src.main experiment matrix` runs generate→write→read→analyze cycles.
+- Safety defaults: experiments prefer `--simulate` mode and outer tracks (0-9) to minimize hardware risk.
 
 ## Pending/Planned Patterns
 
 - Move `analyze_disk()` out of `main.py` into `analysis/analyze_disk.py` and import it from CLI (Phase 3).
-- Create `cmd_experiments.py` and `analysis/metrics.py` to support experiment orchestration and reporting.
-- Metrics standardization (edge jitter, spectral features, correlation) with reusable plotting helpers.
+- Add safety confirmation flows for hardware experiments (cooldown periods, sacrificial media warnings).
+- Expand pattern generation with more sophisticated test patterns (frequency sweeps, error injection, etc.).
+- Implement real-time experiment monitoring and early termination for unstable runs.
