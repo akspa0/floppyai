@@ -1,5 +1,19 @@
 # FloppyAI Roadmap
 
+### Codebase Refactor (New)
+
+- See `docs/refactor_plan.md` for the full plan.
+- Goals:
+  - Reduce per-file size to ~750–800 LOC
+  - Keep `main.py` as a thin CLI and move commands into `cmd_*.py`
+  - Extract shared utilities into `utils/`
+  - Isolate `analyze_disk` pipeline under `analysis/`
+- Phases:
+  1) Extract `cmd_stream_ops.py`, `cmd_corpus.py`, `cmd_diff.py` and wire argparse in `main.py`.
+  2) Create `utils/json_io.py`, `utils/io_paths.py`; migrate helpers.
+  3) Move `analyze_disk` pipeline to `analysis/analyze_disk.py`.
+  4) Optional: per‑track overlay rendering flag; unit tests for `utils` and detection.
+
 This document outlines the near-term plan for expanding FloppyAI beyond analysis-only to a surface-aware, placement-guided tool. It captures what is implemented now, what’s next, and future phases.
 
 ## Scope

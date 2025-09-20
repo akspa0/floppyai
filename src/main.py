@@ -3,6 +3,8 @@ import datetime
 import os
 import sys
 from pathlib import Path
+# Ensure local sibling imports work whether run as a script or with `-m`
+sys.path.insert(0, str(Path(__file__).parent))
 """
 FloppyAI CLI Tool
 Main entrypoint for analyzing, reading, writing, and generating flux streams.
@@ -26,6 +28,15 @@ from rendering import (
 from dtc_wrapper import DTCWrapper
 from custom_encoder import CustomEncoder
 from custom_decoder import CustomDecoder
+from cmd_diff import compare_reads as compare_reads_cmd
+from cmd_corpus import analyze_corpus as analyze_corpus_cmd
+from cmd_stream_ops import (
+    analyze_stream as analyze_stream_cmd,
+    read_track as read_track_cmd,
+    write_track as write_track_cmd,
+    generate_dummy as generate_dummy_cmd,
+    encode_data as encode_data_cmd,
+)
 import glob
 import json
 import re
@@ -2858,7 +2869,7 @@ def main():
     analyze_parser = subparsers.add_parser("analyze", help="Analyze a .raw stream file")
     analyze_parser.add_argument("input", help="Path to .raw file")
     analyze_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    analyze_parser.set_defaults(func=analyze_stream)
+    analyze_parser.set_defaults(func=analyze_stream_cmd)
 
     # Read command
     read_parser = subparsers.add_parser("read", help="Read track from hardware to .raw")
@@ -2868,7 +2879,7 @@ def main():
     read_parser.add_argument("--simulate", action="store_true", help="Simulate (no hardware)")
     read_parser.add_argument("--analyze", action="store_true", help="Analyze output after reading")
     read_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    read_parser.set_defaults(func=read_track)
+    read_parser.set_defaults(func=read_track_cmd)
 
     # Write command
     write_parser = subparsers.add_parser("write", help="Write .raw to hardware track")
@@ -2877,7 +2888,7 @@ def main():
     write_parser.add_argument("side", type=int, choices=[0, 1], help="Side")
     write_parser.add_argument("--simulate", action="store_true", help="Simulate (no hardware)")
     write_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    write_parser.set_defaults(func=write_track)
+    write_parser.set_defaults(func=write_track_cmd)
 
     # Generate dummy command
     gen_parser = subparsers.add_parser("generate", help="Generate dummy .raw stream")
@@ -2887,7 +2898,7 @@ def main():
     gen_parser.add_argument("--cell", type=int, default=4000, dest="cell_length", help="Nominal cell length ns (default: 4000)")
     gen_parser.add_argument("--analyze", action="store_true", help="Analyze after generating")
     gen_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    gen_parser.set_defaults(func=generate_dummy)
+    gen_parser.set_defaults(func=generate_dummy_cmd)
 
     # Encode command
     encode_parser = subparsers.add_parser("encode", help="Encode binary data to custom .raw stream")
@@ -2902,7 +2913,7 @@ def main():
     encode_parser.add_argument("--simulate", action="store_true", help="Simulate DTC operations (for --write)")
     encode_parser.add_argument("--analyze", action="store_true", help="Analyze generated .raw after encoding")
     encode_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    encode_parser.set_defaults(func=encode_data)
+    encode_parser.set_defaults(func=encode_data_cmd)
 
     # Analyze Disk command
     analyze_disk_parser = subparsers.add_parser("analyze_disk", help="Batch analyze .raw streams for disk surface map")
@@ -2948,7 +2959,7 @@ def main():
     corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
     corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
     corpus_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive (propagated to per-disk runs)")
-    corpus_parser.set_defaults(func=analyze_corpus)
+    corpus_parser.set_defaults(func=analyze_corpus_cmd)
 
     # Classify Surface command
     classify_parser = subparsers.add_parser("classify_surface", help="Classify blank-like vs written-like for a surface_map.json")
@@ -2969,7 +2980,7 @@ def main():
     cmp_parser = subparsers.add_parser("compare_reads", help="Compare multiple reads of the same disk (2+ surface_map.json paths or directories)")
     cmp_parser.add_argument("inputs", nargs='+', help="Paths to surface_map.json or directories that contain them")
     cmp_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-    cmp_parser.set_defaults(func=compare_reads)
+    cmp_parser.set_defaults(func=compare_reads_cmd)
     
     args = parser.parse_args()
     if not args.command:
