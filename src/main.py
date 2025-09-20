@@ -1350,15 +1350,27 @@ def analyze_disk(args):
         except Exception:
             profile = None
         overlay_sector_defaults = {'35HD': 18, '35DD': 9, '525HD': 15, '525DD': 9}
+        # Explicit user-provided sectors hint (do NOT reuse angular_bins)
         overlay_sectors_hint = None
-        if getattr(args, 'angular_bins', 0) and int(getattr(args, 'angular_bins', 0)) > 1:
-            overlay_sectors_hint = int(getattr(args, 'angular_bins'))
-        elif profile in overlay_sector_defaults:
-            overlay_sectors_hint = overlay_sector_defaults[profile]
+        try:
+            osh = getattr(args, 'overlay_sectors_hint', None)
+            if osh is not None:
+                osh = int(osh)
+                if 2 <= osh <= 128:
+                    overlay_sectors_hint = osh
+        except Exception:
+            overlay_sectors_hint = None
 
         ov_enabled_flag = bool(getattr(args, 'format_overlay', False))
+        ov_mode = getattr(args, 'overlay_mode', 'mfm')
+        # Parse GCR candidate list
+        gcand_arg = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+        try:
+            gcr_candidates = [int(x.strip()) for x in str(gcand_arg).split(',') if x.strip()]
+        except Exception:
+            gcr_candidates = [10,12,8,9,11,13]
 
-        def _detect_side_overlay(files: list, bins: int) -> tuple:
+        def _detect_side_overlay_mfm(files: list, bins: int) -> tuple:
             """Return (sector_count, boundaries_deg, confidence) using FFT+ACF on aggregated angular hist.
             - files: list of .raw paths for a given side across tracks
             - bins: angular bins per rev
@@ -1464,6 +1476,85 @@ def analyze_disk(args):
             boundaries_deg = [(b / bins) * 360.0 for b in boundaries]
             return (k_sel, boundaries_deg, confidence)
 
+        def _detect_side_overlay_gcr(files: list, bins: int, candidates: list, win_frac: float = 0.01) -> tuple:
+            """Return (sector_count, boundaries_deg, confidence) using boundary-contrast for Apple GCR.
+            We search typical GCR sector counts (e.g., 10 for 400K/800K) and choose phase that minimizes
+            boundary-window counts vs within-sector counts.
+            """
+            hist = np.zeros(bins, dtype=float)
+            used = 0
+            for fp in files[:8]:
+                try:
+                    fa = FluxAnalyzer(); fa.parse(fp)
+                    for rev in fa.revolutions:
+                        if len(rev) < 8: continue
+                        t = np.cumsum(rev.astype(np.float64)); total = t[-1]
+                        if total <= 0: continue
+                        idx = np.floor((t/total) * bins).astype(int); idx[idx >= bins] = bins-1
+                        for k in idx:
+                            hist[k] += 1.0
+                    used += 1
+                except Exception:
+                    continue
+            if used == 0 or np.all(hist == 0):
+                return (None, [], 0.0)
+            # light smoothing
+            if bins >= 5:
+                kernel = np.ones(5, dtype=float)/5.0
+                hist = np.convolve(hist, kernel, mode='same')
+            total_sum = float(np.sum(hist) + 1e-9)
+            win = max(1, int(win_frac * bins))
+            best = None
+            best_params = (None, 0.0, 0.0)  # (k, phi_bins, contrast)
+            for k in candidates:
+                if not isinstance(k, int) or k < 2 or k > bins//2: continue
+                step = bins / float(k)
+                # Search phase within one sector [0, step)
+                phase_steps = max(8, int(step))  # at least 8 samples
+                for ps in range(phase_steps):
+                    phi = (ps / float(phase_steps)) * step
+                    # Compute boundary indices
+                    bidx = [int(round((phi + m*step))) % bins for m in range(k)]
+                    # Sum boundary-window mass
+                    bsum = 0.0
+                    for bi in bidx:
+                        lo = max(0, bi - win); hi = min(bins-1, bi + win)
+                        bsum += float(np.sum(hist[lo:hi+1]))
+                    # Within-sector = total minus boundary windows (approx)
+                    within = max(0.0, total_sum - bsum)
+                    # Normalize by window lengths to get means
+                    b_len = k * (2*win + 1)
+                    w_len = max(1, bins - b_len)
+                    b_mean = bsum / b_len
+                    w_mean = within / w_len
+                    if w_mean <= 1e-9:
+                        contrast = 0.0
+                    else:
+                        contrast = max(0.0, (w_mean - b_mean) / w_mean)
+                    # We want max contrast
+                    if (best is None) or (contrast > best):
+                        best = contrast
+                        best_params = (k, phi, contrast)
+            # If no candidate worked
+            if best is None or best_params[0] is None:
+                return (None, [], 0.0)
+            # Build boundaries from best k/phi and refine to local maxima like MFM
+            k, phi, contrast = best_params
+            step = bins / float(k)
+            win_ref = max(1, int(0.01 * bins))
+            refined_bins = []
+            for m in range(k):
+                b0 = int(round((phi + m*step))) % bins
+                lo = max(0, b0 - win_ref); hi = min(bins-1, b0 + win_ref)
+                if hi > lo:
+                    loc = lo + int(np.argmax(hist[lo:hi+1]))
+                else:
+                    loc = b0
+                refined_bins.append(loc)
+            refined_bins = sorted(refined_bins)
+            boundaries_deg = [(b / bins) * 360.0 for b in refined_bins]
+            return (k, boundaries_deg, float(min(1.0, contrast)))
+
         # Collect representative files per side from surface_map
         side_files = {0: [], 1: []}
         for tk in surface_map:
@@ -1476,22 +1567,62 @@ def analyze_disk(args):
                         break  # one per track is enough
         bins = int(getattr(args, 'angular_bins', 0) or 720)
         by_side = {}
+        per_track_detect = {}  # { side: {track: (sc,bdeg,conf,method)} }
         if ov_enabled_flag:
             for side in [0, 1]:
-                sc, bdeg, conf = _detect_side_overlay(side_files[side], bins)
+                result_mfm = (None, [], 0.0)
+                result_gcr = (None, [], 0.0)
+                if ov_mode in ['mfm', 'auto']:
+                    result_mfm = _detect_side_overlay_mfm(side_files[side], bins)
+                if ov_mode in ['gcr', 'auto']:
+                    result_gcr = _detect_side_overlay_gcr(side_files[side], bins, gcr_candidates)
+                # Choose the better one based on confidence
+                sc, bdeg, conf, method = None, [], 0.0, None
+                if ov_mode == 'mfm':
+                    sc, bdeg, conf = result_mfm; method = 'fft+acf'
+                elif ov_mode == 'gcr':
+                    sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
+                else:
+                    # auto: prefer higher confidence; if close or both low, bias by media/profile toward GCR for 3.5" DD
+                    media_type = getattr(args, 'media_type', None)
+                    prefer_gcr = (media_type == '35DD') or (profile == '35DD')
+                    mfm_c, gcr_c = result_mfm[2], result_gcr[2]
+                    if (mfm_c < 0.25 and gcr_c >= 0.15) or (abs(mfm_c - gcr_c) <= 0.05 and prefer_gcr):
+                        sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
+                    else:
+                        if mfm_c >= gcr_c:
+                            sc, bdeg, conf = result_mfm; method = 'fft+acf'
+                        else:
+                            sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
                 # Fallback to hint if detection failed
-                if (not sc or sc < 2) and overlay_sectors_hint:
-                    step = 360.0 / float(overlay_sectors_hint)
-                    bdeg = [k*step for k in range(overlay_sectors_hint)]
-                    sc = overlay_sectors_hint
-                    conf = 0.2
+                if (not sc or sc < 2):
+                    if ov_mode == 'mfm' and profile in overlay_sector_defaults:
+                        sc = overlay_sector_defaults[profile]
+                        step = 360.0 / float(sc)
+                        bdeg = [k*step for k in range(sc)]
+                        conf = max(conf, 0.2)
+                        method = method or 'mfm-profile-hint'
+                    elif ov_mode == 'gcr' and gcr_candidates:
+                        sc = int(gcr_candidates[0])
+                        sc = max(2, min(sc, 64))
+                        step = 360.0 / float(sc)
+                        bdeg = [k*step for k in range(sc)]
+                        conf = max(conf, 0.2)
+                        method = method or 'gcr-candidate-hint'
+                    elif overlay_sectors_hint:
+                        sc = overlay_sectors_hint
+                        step = 360.0 / float(sc)
+                        bdeg = [k*step for k in range(sc)]
+                        conf = max(conf, 0.2)
+                        method = method or 'user-hint'
                 by_side[str(side)] = {
                     'sector_count': int(sc) if sc else None,
                     'boundaries_deg': bdeg,
                     'confidence': float(conf),
-                    'method': 'fft+acf',
+                    'method': method or 'unknown',
                 }
             # Per-track overlays (lightweight, single representative file per track/side)
+            per_track_detect = {0: {}, 1: {}}
             for tk in list(surface_map.keys()):
                 if tk == 'global':
                     continue
@@ -1504,7 +1635,19 @@ def analyze_disk(args):
                                 break
                         if not f:
                             continue
-                        sc, bdeg, conf = _detect_side_overlay([f], min(360, bins))
+                        # Track-level: try the selected mode only for speed
+                        if ov_mode == 'gcr':
+                            sc, bdeg, conf = _detect_side_overlay_gcr([f], min(360, bins), gcr_candidates)
+                            method_t = 'gcr-contrast'
+                        elif ov_mode == 'mfm':
+                            sc, bdeg, conf = _detect_side_overlay_mfm([f], min(360, bins))
+                            method_t = 'fft+acf'
+                        else:
+                            # auto, quick choose best of both
+                            r1 = _detect_side_overlay_mfm([f], min(360, bins))
+                            r2 = _detect_side_overlay_gcr([f], min(360, bins), gcr_candidates)
+                            sc, bdeg, conf = (r1 if r1[2] >= r2[2] else r2)
+                            method_t = 'fft+acf' if r1[2] >= r2[2] else 'gcr-contrast'
                         if (not sc or sc < 2) and overlay_sectors_hint:
                             step = 360.0 / float(overlay_sectors_hint)
                             bdeg = [k*step for k in range(overlay_sectors_hint)]
@@ -1514,10 +1657,30 @@ def analyze_disk(args):
                             'sector_count': int(sc) if sc else None,
                             'boundaries_deg': bdeg,
                             'confidence': float(conf),
-                            'method': 'fft+acf',
+                            'method': method_t,
                         }
+                        if sc and sc >= 2:
+                            per_track_detect[side][int(tk)] = (int(sc), float(conf))
                 except Exception:
                     continue
+            # If by_side detection is weak, use median per-track sector_count as fallback
+            for side in [0, 1]:
+                side_key = str(side)
+                sc0 = by_side.get(side_key, {}).get('sector_count')
+                conf0 = by_side.get(side_key, {}).get('confidence', 0.0)
+                if (not sc0 or sc0 < 2 or conf0 < 0.25) and per_track_detect.get(side):
+                    vals = [v[0] for v in per_track_detect[side].values() if isinstance(v, tuple)]
+                    if vals:
+                        med_sc = int(np.median(vals))
+                        if med_sc >= 2 and med_sc <= 128:
+                            step = 360.0 / float(med_sc)
+                            bdeg = [k*step for k in range(med_sc)]
+                            by_side[side_key] = {
+                                'sector_count': med_sc,
+                                'boundaries_deg': bdeg,
+                                'confidence': float(max(conf0, 0.3)),
+                                'method': 'per-track-median-hint',
+                            }
 
         # Add global summary to surface_map
         surface_map['global'] = {
@@ -2630,7 +2793,8 @@ def main():
     analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto/profile-based)")
     analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha (default 0.35)")
     analyze_disk_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color (default #00ff99)")
-    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode (default mfm)")
+    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
+    analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
     analyze_disk_parser.set_defaults(func=analyze_disk)
 
     # Analyze Corpus command
@@ -2650,7 +2814,8 @@ def main():
     corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays (0 = auto/profile-based)")
     corpus_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha for generated runs (default 0.35)")
     corpus_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color for generated runs (default #00ff99)")
-    corpus_parser.add_argument("--overlay-mode", choices=["mfm","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode (default mfm)")
+    corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
+    corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
     corpus_parser.set_defaults(func=analyze_corpus)
 
     # Classify Surface command

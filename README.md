@@ -103,6 +103,84 @@ Single‑sided detection:
 - We detect likely single‑sided disks either by very low Side‑1 coverage or by near‑duplicate Side‑1 vs Side‑0 density radials.
 - When detected, the composite title includes “Single‑sided (S1 missing|duplicated)”, and `surface_map.json` records the reason and coverage metrics under `global.insights`.
 
+### Format‑Aware Overlays (MFM & GCR)
+
+FloppyAI can draw sector‑arc overlays on the polar surface maps and persist the detected boundaries to JSON.
+
+- Enable overlays via:
+  - `--format-overlay`
+  - `--overlay-mode mfm|gcr|auto` (default `mfm`)
+  - `--angular-bins N` (resolution; default 720)
+  - `--gcr-candidates "12,10,8,9,11,13"` (only used by `gcr`/`auto`)
+
+What the options mean:
+- `--overlay-mode mfm` uses an FFT+autocorrelation method to estimate the dominant sector count per revolution and phase (typical IBM MFM counts: 8, 9, 15, 18).
+- `--overlay-mode gcr` uses a boundary‑contrast search tailored for Apple GCR media (e.g., classic Macintosh 400K/800K). It tests a set of hypothesized sector counts and picks the one with the strongest gap contrast.
+- `--overlay-mode auto` runs both detectors and chooses the higher‑confidence result.
+- `--gcr-candidates` supplies the list of hypothesized sector counts (k values). For Apple GCR, good starters are `12,10,8,9,11,13`. The detector scores each k and selects the best one.
+
+Choosing good GCR candidates:
+- If you know the likely format, put the expected k first. For many classic Mac GCR tracks, 10 or 12 are common; include neighbors to be safe (e.g., `12,10,8,9,11,13`).
+- If you don’t know, use a wider set (e.g., `6,7,8,9,10,11,12,13,14`), and optionally increase `--angular-bins` (e.g., 900) for finer phase resolution.
+- For IBM MFM (PC) media, you can use `--overlay-mode mfm` and ignore GCR candidates.
+
+Outputs written when overlays are enabled:
+- Per‑disk images (in the selected `--output-dir` or timestamped run):
+  - `<label>_surface_disk_surface_overlay.png` (both sides)
+  - `<label>_surface_side0_overlay.png`, `<label>_surface_side1_overlay.png`
+- Per‑disk JSON:
+  - `surface_map.json` includes `global.insights.overlay.by_side["0"|"1"] = { sector_count, boundaries_deg[], confidence, method }`
+  - Per‑track hints: `surface_map["<track>"].overlay["0"|"1"]`
+  - `overlay_debug.json` contains only the overlay block for quick inspection.
+
+Corpus behavior with overlays:
+- `analyze_corpus` aggregates any `surface_map.json` it finds under the input root. Use `--generate-missing` to build per‑disk maps first (propagates overlay flags to those runs).
+- A manifest `corpus_inputs.txt` is written under `run_dir/corpus/` listing exactly which maps were consumed. If none are found, `corpus_no_inputs.txt` explains the search root.
+
+Examples:
+```
+# MFM (PC) overlay, prefer 18 sectors (3.5" HD)
+python main.py analyze_disk ..\streams\pcdisk --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720
+
+# GCR (Mac) overlay with candidates for classic 400K/800K
+python main.py analyze_disk ..\streams\macdisk --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" --angular-bins 900
+
+# Corpus from raw streams, generating per‑disk maps with overlays then aggregating
+python main.py analyze_corpus ..\stream_dumps --generate-missing --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13"
+```
+
+#### Interpreting overlay visuals
+
+- The overlay draws radial spokes at the detected sector boundary angles (`boundaries_deg`). Your eye sees the wedges between spokes as sector "slices".
+- The number of spokes equals the detected `sector_count` (k). For example, k=10 yields lines every 36°.
+- For MFM (IBM‑like) media, k is usually constant per side (e.g., 9, 15, 18) and the spokes are evenly spaced.
+- For Mac GCR 400K/800K (CLV with zones), k can differ by radius (track). The per‑side overlay is a single aggregate; per‑track overlays recorded in `surface_map.json` show the zoned variation. If aggregate confidence is low, the tool falls back to the per‑track median k.
+- Confidence reflects how much the boundary windows look like gaps (low transition density) compared to within‑sector windows. Low confidence suggests weak periodicity or heavy zoning across the tracks used.
+
+#### Improving overlay visibility
+
+- Use `--overlay-color` to change line color and `--overlay-alpha` to change opacity.
+- Examples:
+  - Bright red, 80% opacity:
+    ```
+    --overlay-color "#ff3333" --overlay-alpha 0.8
+    ```
+  - Bright yellow, 70% opacity:
+    ```
+    --overlay-color "#ffd60a" --overlay-alpha 0.7
+    ```
+- Increase `--angular-bins` (e.g., 900) for finer phase alignment if the lines look off.
+
+#### Troubleshooting
+
+- Empty or all‑around spokes at tiny increments usually mean a bad fallback. Re‑run with:
+  - A sensible `--gcr-candidates` list for Mac GCR, e.g., `"12,11,10,9,8"`.
+  - Moderate `--angular-bins` (720–1080).
+  - If using `--overlay-mode auto` on Mac disks, pass `--media-type 35DD` to bias auto toward GCR.
+- If per‑side detection remains weak on GCR, consult per‑track overlays in `surface_map.json`:
+  - `"<track>".overlay["0"|"1"].sector_count` shows the zoned k per track.
+  - The per‑side overlay will fall back to the median per‑track k when confidence is low.
+
 ## Notes
 
 - Outputs respect `--output-dir` without adding timestamps. If omitted, `test_outputs/<timestamp>/` is used.
