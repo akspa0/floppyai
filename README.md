@@ -21,10 +21,10 @@ FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnet
 
 2) Run corpus analysis (from the repository root)
 ```bash
-python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --rpm 360.0 --summarize \
+python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --rpm 360.0 --summarize \
   --lm-host 192.168.1.131:1234 --lm-model qwen-2.5-coder-finetuned --lm-temperature 0.0
 ```
-- Tip: prefer the `python -m FloppyAI.src.main` form so the package resolves cleanly.
+- Tip: prefer the direct-run form `python FloppyAI/src/main.py` (module mode works too if you prefer).
 - `--generate-missing` processes each disk with `analyze_disk`.
 - `--rpm 360.0` assumes a 1.2MB 5.25" drive.
 
@@ -50,11 +50,14 @@ python -m FloppyAI.src.main analyze_corpus .\stream_dumps --generate-missing --r
 
 ## How to Run
 
-- Recommended: run all commands from the repository root using module syntax
+- Recommended: run directly from the repository root
+```bash
+python FloppyAI/src/main.py --help
 ```
+- Alternate: module mode also works from the repository root
+```bash
 python -m FloppyAI.src.main --help
 ```
-- Alternate: from `FloppyAI/src/` you can run `python main.py ...` but some subprocess flows assume module invocation from root.
 
 ## Documentation
 
@@ -66,14 +69,14 @@ python -m FloppyAI.src.main --help
 
 - Analyze a full disk (PC 3.5" HD with MFM overlays)
   ```bash
-  python -m FloppyAI.src.main analyze_disk .\stream_dumps\1.44\win95boot\0 \
+  python FloppyAI/src/main.py analyze_disk .\stream_dumps\1.44\win95boot\0 \
     --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\win95_0
   ```
 
 - Analyze a Mac GCR disk (400K/800K) with zoned overlays
   ```bash
-  python -m FloppyAI.src.main analyze_disk .\stream_dumps\macdisk \
+  python FloppyAI/src/main.py analyze_disk .\stream_dumps\macdisk \
     --media-type 35DD --format-overlay --overlay-mode gcr \
     --gcr-candidates "12,10,8,9,11,13" --angular-bins 900 \
     --output-dir .\test_outputs\macdisk
@@ -81,13 +84,13 @@ python -m FloppyAI.src.main --help
 
 - Compare two reads (requires each to have surface_map.json)
   ```bash
-  python -m FloppyAI.src.main compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
+  python FloppyAI/src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
     --output-dir .\test_outputs\diff_win95
   ```
 
 - Build a corpus and auto-generate missing per-disk maps
   ```bash
-  python -m FloppyAI.src.main analyze_corpus .\stream_dumps \
+  python FloppyAI/src/main.py analyze_corpus .\stream_dumps \
     --generate-missing --media-type 35HD \
     --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\corpus
@@ -95,7 +98,7 @@ python -m FloppyAI.src.main --help
 
 ### analyze_corpus
 ```
-python -m FloppyAI.src.main analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] \
+python FloppyAI/src/main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] \
   [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
 Outputs are placed under `test_outputs/<timestamp>/disks/<disk-label>/`. If you provide `--output-dir` to analyze_corpus, that directory is used instead of a timestamp.
@@ -107,14 +110,14 @@ Notes on RPM/Profile:
 
 ### analyze_disk
 ```
-python -m FloppyAI.src.main analyze_disk <path-to-dir-or-raw> [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] [--lm-host HOST:PORT] \
+python FloppyAI/src/main.py analyze_disk <path-to-dir-or-raw> [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] [--lm-host HOST:PORT] \
   [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
 Saves `surface_map.json`, flux plots, the combined polar disk‑surface (`<label>_surface_disk_surface.png`), per‑side high‑res surfaces (`<label>_surface_side0.png`, `..._side1.png`), Instability Map (`<label>_instability_map.png`), Instability CSV (`<label>_instability_summary.csv`), and a composite image (`<label>_composite_report.png`).
 
 ### analyze (single .raw)
 ```
-python -m FloppyAI.src.main analyze <input.raw> [--output-dir]
+python FloppyAI/src/main.py analyze <input.raw> [--output-dir]
 ```
 Generates per-file flux plots and stats.
 
