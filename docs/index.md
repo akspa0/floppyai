@@ -11,6 +11,9 @@ Welcome to FloppyAI. Start here to navigate the docs.
   - Refactor Plan: ./refactor_plan.md
   - Roadmap: ./roadmap.md
 
+- Experiments
+  - Experiments Hub: ./experiments/index.md
+
 ## Recommended Invocation
 
 Run all commands from the repository root using Python's module syntax:
