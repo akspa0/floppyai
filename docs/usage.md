@@ -142,6 +142,31 @@ python FloppyAI/src/main.py plan_pool <surface_map.json> [--min-density 2000] [-
 
 ---
 
+## Cross‑machine (Linux DTC) workflow
+
+When KryoFlux DTC hardware is attached to a Linux host that requires sudo, do not attempt to orchestrate DTC from Windows. Use a manual, script-based flow on Linux and analyze on Windows.
+
+Recommended steps:
+- Generate streams on Windows with FloppyAI (you can test with `--simulate` first):
+  ```bash
+  python FloppyAI/src/main.py generate 80 0 --revs 1 --density 1.2 --pattern prbs7 --output-dir .\test_outputs\to_linux
+  ```
+- Transfer the generated `.raw` file(s) to the Linux DTC host (USB/share/etc.).
+- On Linux, run your bash script(s) to write and then read back captures with dtc (sudo as needed). For example:
+  ```bash
+  # Example only; adapt to your environment
+  sudo dtc -d 0 -i 0 -t 80 -s 0 -f /path/to/generated.raw write
+  sudo dtc -d 0 -i 0 -t 80 -s 0 -r 3 -f /path/to/captured_80_0.raw read
+  ```
+- Transfer captured `.raw` back to Windows and analyze:
+  ```bash
+  python FloppyAI/src/main.py analyze path\to\captured_80_0.raw --output-dir .\test_outputs\captures
+  ```
+
+Notes:
+- `read`/`write` CLI commands in this repo assume local DTC availability; on Windows, prefer `--simulate` or use them only if you have local DTC.
+- Cross‑machine orchestration (e.g., SSH) is intentionally out of scope.
+
 ## Overlay Notes
 
 - The overlay block is saved in `surface_map.json` under `global.insights.overlay` and per‑track under `<track>.overlay`.

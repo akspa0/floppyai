@@ -47,3 +47,13 @@ Notes:
 - Windows paths and quoting in examples.
 - Keep JSON serialization centralized via `utils/json_io.dump_json` to avoid dtype/Path issues.
 - Prefer internal function calls for orchestration; fall back to subprocess where isolation or packaging makes it safer.
+
+## Cross-machine Hardware
+- Development and primary analysis occur on Windows; KryoFlux DTC hardware access occurs on a Linux host with sudo.
+- We do not attempt cross-machine orchestration (e.g., SSH from Windows). Hardware operations are performed manually on the Linux host using bash scripts.
+- Workflow:
+  - Generate `.raw` test patterns on Windows with FloppyAI.
+  - Transfer artifacts to the Linux host (USB/share/etc.).
+  - On Linux, run bash scripts that call `dtc` (with sudo) to write and read back captures.
+  - Transfer captured `.raw` files back to Windows for `analyze`/`analyze_disk`/`analyze_corpus`.
+- `DTCWrapper` remains available for local-only setups and simulation; it is not used for cross-machine hardware workflows.

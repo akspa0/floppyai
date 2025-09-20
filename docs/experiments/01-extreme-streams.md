@@ -15,6 +15,7 @@ Push the recording limits of floppy media using controlled flux patterns and den
 - Cooldown between writes (e.g., 10–20s).
 - Enforce bounds: `--density ≤ 2.5`, reasonable run-lengths, bounded experiment duration.
 - Dry-run first with `--simulate`.
+- Hardware on Linux DTC host (sudo): Do not orchestrate DTC from Windows. Generate streams on Windows, then on the Linux host run bash scripts to `dtc write` and `dtc read`. Transfer captures back to Windows for analysis. See `docs/usage.md` → Cross‑machine workflow.
 
 ## Experiment Matrix
 
@@ -81,8 +82,8 @@ Outputs per run:
 ## Protocol (per cell)
 
 1. Generate pattern to `.raw` with the given density and revs.
-2. Write the `.raw` to track/side.
-3. Read N revs back to a new `.raw` capture.
+2. If using Linux DTC host: transfer `.raw` to Linux and run bash scripts (sudo) to write and read back captures.
+3. Otherwise (local DTC): write the `.raw` to track/side and read N revs back to a new `.raw` capture.
 4. Analyze capture and compute metrics.
 5. Append metrics to report; cool down before next cell.
 

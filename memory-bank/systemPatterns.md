@@ -45,7 +45,7 @@ This document captures architecture, design decisions, and recurring patterns us
   - LLM JSON is validated/coerced; a text narrative is rendered to `.txt`.
 - Overlays:
   - Controlled via `--format-overlay`, `--overlay-mode {mfm,gcr,auto}`, `--angular-bins`, `--overlay-sectors-hint`, `--gcr-candidates`, `--overlay-color`, `--overlay-alpha`.
-  - Experiment patterns:
+- Experiment patterns:
   - `random`: Random flux intervals within density bounds
   - `prbs7`: Pseudo-random binary sequence using 7-bit LFSR
   - `alt`: Alternating long/short cell pattern
@@ -60,6 +60,18 @@ This document captures architecture, design decisions, and recurring patterns us
   - Prefer internal calls where possible to avoid environment skew; use subprocess as a fallback for isolation.
 - New experiment subcommand uses subprocess orchestration: `python -m FloppyAI.src.main experiment matrix` runs generate→write→read→analyze cycles.
 - Safety defaults: experiments prefer `--simulate` mode and outer tracks (0-9) to minimize hardware risk.
+
+### Hardware Orchestration (Cross‑Machine)
+
+- DTC is operated on a Linux host with sudo; we do not wrap or orchestrate it cross‑machine from the Windows environment.
+- Hardware steps use Linux bash scripts on the DTC host. The canonical flow is:
+  1) Generate `.raw` on Windows using FloppyAI.
+  2) Manually transfer to the Linux host.
+  3) Run a bash script to `dtc write` and `dtc read` (sudo as required).
+  4) Transfer captured `.raw` back to Windows.
+  5) Analyze with FloppyAI (`analyze`, `analyze_disk`, `analyze_corpus`).
+- `DTCWrapper` remains optional for local-only setups and for simulation; it is not used for cross‑machine hardware.
+- `cmd_experiments.py` defaults to `--simulate` on Windows; documentation points to Linux scripts for real hardware steps.
 
 ## Pending/Planned Patterns
 
