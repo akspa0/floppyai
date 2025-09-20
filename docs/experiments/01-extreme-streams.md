@@ -38,7 +38,7 @@ The experiment harness will orchestrate generate → write → read → analyze 
 
 - Dry-run (no hardware):
   ```bash
-  python -m FloppyAI.src.main experiment \
+  python FloppyAI/src/main.py experiment \
     --patterns prbs7,alt,random \
     --densities 0.8,1.0,1.2 \
     --tracks 80-83 --sides 0 \
@@ -48,7 +48,7 @@ The experiment harness will orchestrate generate → write → read → analyze 
 
 - Minimal hardware run (safe defaults, single cell):
   ```bash
-  python -m FloppyAI.src.main experiment \
+  python FloppyAI/src/main.py experiment \
     --patterns prbs7 \
     --densities 1.0 \
     --tracks 80 --sides 0 \
@@ -58,7 +58,7 @@ The experiment harness will orchestrate generate → write → read → analyze 
 
 - Direct pattern generation (without harness), using extended `generate` flags:
   ```bash
-  python -m FloppyAI.src.main generate 80 0 \
+  python FloppyAI/src/main.py generate 80 0 \
     --revs 1 --density 1.2 --pattern prbs7 --seed 42 \
     --analyze --output-dir .\test_outputs\experiments\gen_only
   ```
@@ -96,6 +96,6 @@ Outputs per run:
 
 ## Notes
 
-- All commands should be run from the repository root with `python -m FloppyAI.src.main`.
+- All commands should be run from the repository root with `python FloppyAI/src/main.py` (module syntax also works).
 - Start with `--simulate` to validate directory structure and manifests.
 - Use `--media-type` (e.g., `35HD`) and consistent `--rpm` or `--profile` for comparability.

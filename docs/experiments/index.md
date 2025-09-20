@@ -16,8 +16,8 @@ This section hosts structured experiment plans and results for FloppyAI. Each ex
 
 - Name experiments using a leading number for ordering: `NN-short-name.md`
 - Keep experiments self-contained with reproducible CLI examples
-- Prefer running from the repository root and using module syntax:
+- Prefer running from the repository root using the main script (module mode also works):
   ```bash
-  python -m FloppyAI.src.main --help
+  python FloppyAI/src/main.py --help
   ```
 - Use sacrificial media and follow safety guidance for any hardware runs

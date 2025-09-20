@@ -23,7 +23,7 @@ Short description of the experiment and what it validates.
 
 - Recommended invocation from repository root:
   ```bash
-  python -m FloppyAI.src.main --help
+  python FloppyAI/src/main.py --help
   ```
 - Commands used (copy/paste examples):
   - Generation / Write / Read / Analyze
