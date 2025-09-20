@@ -142,7 +142,14 @@ def analyze_corpus(args):
                     lm_model=getattr(args, 'lm_model', 'local-model'),
                     lm_temperature=getattr(args, 'lm_temperature', 0.2),
                     summarize=getattr(args, 'summarize', False),
-                    output_dir=str(disk_dir), summary_format='json'
+                    output_dir=str(disk_dir), summary_format='json',
+                    media_type=getattr(args, 'media_type', None),
+                    # Overlay flags propagated from corpus args
+                    format_overlay=getattr(args, 'format_overlay', False),
+                    angular_bins=getattr(args, 'angular_bins', 0),
+                    overlay_alpha=getattr(args, 'overlay_alpha', 0.35),
+                    overlay_color=getattr(args, 'overlay_color', '#00ff99'),
+                    overlay_mode=getattr(args, 'overlay_mode', 'mfm')
                 )
                 analyze_disk(disk_args)
                 # Copy/rename composite to a concise name per disk
@@ -178,10 +185,28 @@ def analyze_corpus(args):
         except Exception:
             pass
         inputs = sorted(found)
+        # Persist a manifest of inputs for transparency
+        try:
+            corpus_dir.mkdir(parents=True, exist_ok=True)
+            with open(corpus_dir / 'corpus_inputs.txt', 'w') as mf:
+                if inputs:
+                    mf.write("Found the following surface_map.json files:\n")
+                    for p in inputs:
+                        mf.write(str(p) + "\n")
+                else:
+                    mf.write("No surface_map.json files found under inputs/test_outputs/run_dir searches.\n")
+        except Exception:
+            pass
     elif base.name.endswith('.json'):
         inputs = [base]
     if not inputs:
         print(f"No surface_map.json found under {args.inputs}")
+        try:
+            with open(corpus_dir / 'corpus_no_inputs.txt', 'w') as nf:
+                nf.write(f"No surface_map.json found under: {args.inputs}\n")
+                nf.write(f"Run directory: {run_dir}\n")
+        except Exception:
+            pass
         return 1
 
     corpus = []
@@ -428,13 +453,6 @@ def analyze_corpus(args):
                 axs.set_title(f'{label} - Side 0: Track vs Density')
                 axs.set_xlabel('Track Index')
                 axs.set_ylabel('Bits per Revolution')
-                if pcm is not None:
-                    # Place a vertical colorbar to the right, outside the subplots
-                    from mpl_toolkits.axes_grid1 import make_axes_locatable
-                    # Use the last axes to anchor the colorbar
-                    divider = make_axes_locatable(axs)
-                    cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
-                    cbar.set_label('Bits per Revolution')
                 plt.tight_layout()
                 safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
                 plt.savefig(str(run_dir / 'corpus' / f'corpus_tracks_side0_{safe_label}.png'), dpi=150)
@@ -1141,17 +1159,75 @@ def analyze_disk(args):
                 'measured_rpm': 60000000000 / rev_time if rev_time > 0 else 0,
             }
             global_analyzer.stats = global_stats
-            # Simple density class heuristic: HD (1.2MB) typically ~2us cells, DD (360KB) ~4us
-            try:
-                mi = global_stats.get('mean_interval_ns') or 0
-                density_class = 'HD (1.2MB)' if mi > 0 and mi < 3000 else 'DD (360KB)'
-            except Exception:
-                density_class = None
             
-            # Resolve effective RPM: --rpm overrides --profile; default 360 if none
+            # Resolve effective RPM first: --media-type or --rpm overrides --profile; default 360 if none
             rpm_profile_map = {'35HD': 300.0, '35DD': 300.0, '525HD': 360.0, '525DD': 300.0}
+            media_type = getattr(args, 'media_type', None)
             profile = getattr(args, 'profile', None)
-            effective_rpm = float(args.rpm) if getattr(args, 'rpm', None) is not None else rpm_profile_map.get(profile, 360.0)
+            effective_rpm = (
+                rpm_profile_map.get(media_type, None) if media_type in rpm_profile_map else None
+            )
+            if effective_rpm is None:
+                effective_rpm = float(args.rpm) if getattr(args, 'rpm', None) is not None else rpm_profile_map.get(profile, 360.0)
+            
+            # Derive density indicator using per-entry analysis densities if available
+            per_entry_dens = []
+            for track in surface_map:
+                if track == 'global':
+                    continue
+                for side in [0, 1]:
+                    for entry in surface_map[track].get(side, []):
+                        if isinstance(entry, dict):
+                            d = entry.get('analysis', {}).get('density_estimate_bits_per_rev')
+                            if isinstance(d, (int, float)):
+                                per_entry_dens.append(float(d))
+            median_dens = float(np.median(per_entry_dens)) if per_entry_dens else None
+            # Fallback to global estimate if present
+            fallback_global_dens = global_stats.get('density_bits_per_full_rev') if isinstance(global_stats, dict) else None
+            dens_for_class = median_dens if median_dens is not None else fallback_global_dens
+            
+            # Overlay sector count hint
+            overlay_info = surface_map.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(surface_map.get('global'), dict) else {}
+            by_side_ov = overlay_info.get('by_side', {}) if isinstance(overlay_info, dict) else {}
+            sector_counts = []
+            for s in ['0', '1']:
+                sc = by_side_ov.get(s, {}).get('sector_count')
+                if isinstance(sc, int):
+                    sector_counts.append(sc)
+            median_sc = int(np.median(sector_counts)) if sector_counts else None
+            
+            # Media-type override if explicitly provided
+            if media_type in ['35HD','35DD','525HD','525DD']:
+                density_class = {
+                    '35HD': '3.5" HD (1.44MB)',
+                    '35DD': '3.5" DD (720KB)',
+                    '525HD': '5.25" HD (1.2MB)',
+                    '525DD': '5.25" DD (360KB)'
+                }[media_type]
+            else:
+                # Decide family by RPM: ~300 => 3.5", ~360 => 5.25"
+                family = '35' if effective_rpm and effective_rpm <= 330 else '525'
+                # Decide HD/DD by density or sector count
+                is_hd = None
+                if dens_for_class is not None and effective_rpm:
+                    # Expected bits per rev: HD ~ 500kbps * (60/RPM), DD ~ 250kbps * (60/RPM)
+                    rev_time_s = 60.0 / float(effective_rpm)
+                    th = 0.75 * 500000.0 * rev_time_s  # 75% of HD nominal
+                    is_hd = dens_for_class >= th
+                if is_hd is None and median_sc is not None:
+                    # Sector count hints: 18 (~3.5 HD), 15 (~5.25 HD), 9 (~DD)
+                    if median_sc >= 16:
+                        is_hd = True
+                    elif median_sc <= 10:
+                        is_hd = False
+                # Fallback to mean interval if nothing else
+                if is_hd is None:
+                    mi = global_stats.get('mean_interval_ns') or 0
+                    is_hd = (mi > 0 and mi < 3000)
+                if family == '35':
+                    density_class = '3.5" HD (1.44MB)' if is_hd else '3.5" DD (720KB)'
+                else:
+                    density_class = '5.25" HD (1.2MB)' if is_hd else '5.25" DD (360KB)'
 
             # RPM validation if provided/derived
             rpm_drift = None
@@ -1268,6 +1344,181 @@ def analyze_disk(args):
                 if cos_sim > 0.995 and mad < 0.05:
                     single_sided_reason = 'duplicated_s0'
         
+        # Prepare format-overlay metadata and detection (per-side)
+        try:
+            profile = getattr(args, 'profile', None)
+        except Exception:
+            profile = None
+        overlay_sector_defaults = {'35HD': 18, '35DD': 9, '525HD': 15, '525DD': 9}
+        overlay_sectors_hint = None
+        if getattr(args, 'angular_bins', 0) and int(getattr(args, 'angular_bins', 0)) > 1:
+            overlay_sectors_hint = int(getattr(args, 'angular_bins'))
+        elif profile in overlay_sector_defaults:
+            overlay_sectors_hint = overlay_sector_defaults[profile]
+
+        ov_enabled_flag = bool(getattr(args, 'format_overlay', False))
+
+        def _detect_side_overlay(files: list, bins: int) -> tuple:
+            """Return (sector_count, boundaries_deg, confidence) using FFT+ACF on aggregated angular hist.
+            - files: list of .raw paths for a given side across tracks
+            - bins: angular bins per rev
+            """
+            import math
+            hist = np.zeros(bins, dtype=float)
+            used = 0
+            for fp in files[:8]:  # limit cost
+                try:
+                    fa = FluxAnalyzer()
+                    fa.parse(fp)
+                    # Aggregate transitions into angular bins across revolutions
+                    for rev in fa.revolutions:
+                        if len(rev) < 8:
+                            continue
+                        t = np.cumsum(rev.astype(np.float64))
+                        total = t[-1]
+                        if total <= 0:
+                            continue
+                        idx = np.floor((t / total) * bins).astype(int)
+                        idx[idx >= bins] = bins - 1
+                        # Count transitions per bin
+                        for k in idx:
+                            hist[k] += 1.0
+                    used += 1
+                except Exception:
+                    continue
+            if used == 0 or np.all(hist == 0):
+                return (None, [], 0.0)
+            # Smooth a bit
+            if bins >= 5:
+                kernel = np.ones(5, dtype=float) / 5.0
+                hist = np.convolve(hist, kernel, mode='same')
+            # Remove DC
+            sig = hist - np.mean(hist)
+            # FFT
+            spec = np.fft.rfft(sig)
+            pow = (spec.real**2 + spec.imag**2)
+            # Frequencies correspond to k cycles per revolution; ignore 0 and > N/2
+            k_vals = np.arange(len(pow))
+            k_vals[0] = 0
+            # Search for plausible sector counts (6..64) typical for MFM variations
+            lo, hi = 6, min(64, bins//2)
+            mask = (k_vals >= lo) & (k_vals <= hi)
+            if not np.any(mask):
+                return (None, [], 0.0)
+            k_masked = k_vals[mask]
+            p_masked = pow[mask]
+            k_peak = int(k_masked[np.argmax(p_masked)])
+            peak_power = float(np.max(p_masked))
+            total_power = float(np.sum(p_masked) + 1e-9)
+            conf_fft = float(min(1.0, peak_power / (total_power + 1e-9)))
+            # Autocorrelation on signal for lag-based confirmation
+            ac = np.correlate(sig, sig, mode='full')
+            ac = ac[ac.size//2:]
+            # plausible lags ~= bins/k in [bins/hi , bins/lo]
+            lag_lo = max(1, int(bins / float(hi)))
+            lag_hi = max(lag_lo+1, int(bins / float(lo)))
+            ac_slice = ac[lag_lo:lag_hi] if lag_hi > lag_lo else ac
+            if len(ac_slice) > 0:
+                lag_peak_off = int(np.argmax(ac_slice))
+                lag_peak = lag_lo + lag_peak_off
+                k_acf = int(round(bins / float(max(1, lag_peak))))
+                conf_acf = float(max(0.0, min(1.0, ac_slice[lag_peak_off] / (ac[0] + 1e-9))))
+                # If ACF suggests a close-by k, prefer consistent value and refine phase later
+                if abs(k_acf - k_peak) <= 1 and conf_acf > 0.2:
+                    k_sel = k_peak
+                else:
+                    # pick the one with larger confidence proxy
+                    k_sel = k_peak if conf_fft >= conf_acf else k_acf
+            else:
+                k_sel = k_peak
+                conf_acf = 0.0
+            # Combined confidence
+            confidence = float(max(0.0, min(1.0, 0.5*conf_fft + 0.5*conf_acf)))
+            # Phase from complex FFT at k_peak
+            coeff = spec[k_sel]
+            phase = math.atan2(coeff.imag, coeff.real)  # radians
+            # Maxima of cos(k*theta - phase) occur at theta = phase/k + 2π*m/k
+            # Convert to bin indices [0..bins)
+            boundaries = []
+            for m in range(k_sel):
+                theta = (phase + 2*np.pi*m) / float(k_sel)
+                # Map to [0, 2π)
+                theta = (theta + 2*np.pi) % (2*np.pi)
+                b = (theta / (2*np.pi)) * bins
+                boundaries.append(b)
+            # Local refinement: snap to nearest local maxima within ±1% of revolution
+            ref_win = max(1, int(0.01 * bins))
+            refined = []
+            for b in boundaries:
+                i0 = int(round(b))
+                lo_i = max(0, i0 - ref_win)
+                hi_i = min(bins-1, i0 + ref_win)
+                if hi_i > lo_i:
+                    loc = lo_i + int(np.argmax(hist[lo_i:hi_i+1]))
+                else:
+                    loc = i0
+                refined.append(loc)
+            boundaries = sorted(refined)
+            # Sort and convert to degrees
+            boundaries = sorted(boundaries)
+            boundaries_deg = [(b / bins) * 360.0 for b in boundaries]
+            return (k_sel, boundaries_deg, confidence)
+
+        # Collect representative files per side from surface_map
+        side_files = {0: [], 1: []}
+        for tk in surface_map:
+            if tk == 'global':
+                continue
+            for side in [0, 1]:
+                for e in surface_map[tk].get(side, []):
+                    if isinstance(e, dict) and isinstance(e.get('file'), str):
+                        side_files[side].append(e['file'])
+                        break  # one per track is enough
+        bins = int(getattr(args, 'angular_bins', 0) or 720)
+        by_side = {}
+        if ov_enabled_flag:
+            for side in [0, 1]:
+                sc, bdeg, conf = _detect_side_overlay(side_files[side], bins)
+                # Fallback to hint if detection failed
+                if (not sc or sc < 2) and overlay_sectors_hint:
+                    step = 360.0 / float(overlay_sectors_hint)
+                    bdeg = [k*step for k in range(overlay_sectors_hint)]
+                    sc = overlay_sectors_hint
+                    conf = 0.2
+                by_side[str(side)] = {
+                    'sector_count': int(sc) if sc else None,
+                    'boundaries_deg': bdeg,
+                    'confidence': float(conf),
+                    'method': 'fft+acf',
+                }
+            # Per-track overlays (lightweight, single representative file per track/side)
+            for tk in list(surface_map.keys()):
+                if tk == 'global':
+                    continue
+                try:
+                    for side in [0, 1]:
+                        f = None
+                        for e in surface_map[tk].get(side, []):
+                            if isinstance(e, dict) and isinstance(e.get('file'), str):
+                                f = e['file']
+                                break
+                        if not f:
+                            continue
+                        sc, bdeg, conf = _detect_side_overlay([f], min(360, bins))
+                        if (not sc or sc < 2) and overlay_sectors_hint:
+                            step = 360.0 / float(overlay_sectors_hint)
+                            bdeg = [k*step for k in range(overlay_sectors_hint)]
+                            sc = overlay_sectors_hint
+                            conf = 0.2
+                        surface_map[tk].setdefault('overlay', {})[str(side)] = {
+                            'sector_count': int(sc) if sc else None,
+                            'boundaries_deg': bdeg,
+                            'confidence': float(conf),
+                            'method': 'fft+acf',
+                        }
+                except Exception:
+                    continue
+
         # Add global summary to surface_map
         surface_map['global'] = {
             'stats': global_stats,
@@ -1286,9 +1537,31 @@ def analyze_disk(args):
                 'single_sided_reason': single_sided_reason,
                 'side0_tracks_with_data': c0,
                 'side1_tracks_with_data': c1,
-                'coverage_ratio_s1_over_s0': cov_ratio
+                'coverage_ratio_s1_over_s0': cov_ratio,
+                'overlay': {
+                    'enabled': bool(getattr(args, 'format_overlay', False)),
+                    'mode': getattr(args, 'overlay_mode', 'mfm'),
+                    'sector_count_hint': overlay_sectors_hint,
+                    'by_side': by_side,
+                }
             }
         }
+        # Persist surface map with overlay metadata for corpus discovery
+        try:
+            out_map = run_dir / 'surface_map.json'
+            with open(out_map, 'w') as f:
+                json.dump(surface_map, f, indent=2)
+            print(f"Surface map saved to {out_map}")
+        except Exception as e:
+            print(f"Failed to write surface_map.json: {e}")
+        # Export a focused overlay debug snapshot for easier verification
+        try:
+            overlay_info = surface_map.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(surface_map.get('global'), dict) else {}
+            with open(run_dir / 'overlay_debug.json', 'w') as of:
+                json.dump(overlay_info, of, indent=2)
+            print(f"Overlay debug saved to {run_dir / 'overlay_debug.json'}")
+        except Exception as e:
+            print(f"Failed to write overlay_debug.json: {e}")
     else:
         print("No flux data overall")
         # In corpus mode, we rely on the per-disk composite produced by analyze_disk
@@ -1426,6 +1699,77 @@ def analyze_disk(args):
             plt.savefig(str(out_single), dpi=240)
             plt.close()
             print(f"Disk surface (side {side}) saved to {out_single}")
+
+        # If overlay requested and boundaries exist, render overlay variants
+        try:
+            ov_enabled = bool(getattr(args, 'format_overlay', False))
+            ov_alpha = float(getattr(args, 'overlay_alpha', 0.35))
+            ov_color = getattr(args, 'overlay_color', '#00ff99')
+            # Retrieve side-specific boundaries from global insights
+            overlay_info = sm.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(sm.get('global'), dict) else {}
+            bside = overlay_info.get('by_side', {}) if isinstance(overlay_info, dict) else {}
+            thetas_by_side = {}
+            for s in [0, 1]:
+                bdeg = bside.get(str(s), {}).get('boundaries_deg', [])
+                if not bdeg:
+                    continue
+                thetas_by_side[s] = [np.deg2rad(x) for x in bdeg]
+            if ov_enabled and thetas_by_side:
+                # Combined overlay
+                fig = plt.figure(figsize=(13, 5.5))
+                gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
+                ax0 = fig.add_subplot(gs[0, 0], projection='polar')
+                ax1 = fig.add_subplot(gs[0, 1], projection='polar')
+                cax = fig.add_subplot(gs[0, 2])
+                for ax, side in [(ax0, 0), (ax1, 1)]:
+                    if masks[side].any():
+                        Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
+                        pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+                        ax.set_ylim(0, T)
+                        ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
+                        ax.set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+                        if side in thetas_by_side:
+                            for th in thetas_by_side[side]:
+                                ax.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.8)
+                    else:
+                        ax.set_ylim(0, T)
+                        ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+                if 'pcm' in locals() and pcm is not None:
+                    cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+                    cbar.set_label('Bits per Revolution')
+                plt.tight_layout()
+                out_overlay = Path(str(out_prefix) + "_disk_surface_overlay.png")
+                plt.savefig(str(out_overlay), dpi=220)
+                plt.close()
+                print(f"Disk surface overlay saved to {out_overlay}")
+
+                # Per-side overlays
+                for side in [0, 1]:
+                    fig = plt.figure(figsize=(7, 6))
+                    gs = GridSpec(1, 2, width_ratios=[1, 0.05], figure=fig)
+                    ax = fig.add_subplot(gs[0, 0], projection='polar')
+                    cax = fig.add_subplot(gs[0, 1])
+                    if masks[side].any():
+                        Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
+                        pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+                        ax.set_ylim(0, T)
+                        ax.set_yticks([0, T//4, T//2, 3*T//4, T-1])
+                        ax.set_yticklabels(["0", str(T//4), str(T//2), str(3*T//4), str(T-1)])
+                        if side in thetas_by_side:
+                            for th in thetas_by_side[side]:
+                                ax.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.8)
+                        cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
+                        cbar.set_label('Bits per Revolution')
+                    else:
+                        ax.set_ylim(0, T)
+                        ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
+                    plt.tight_layout()
+                    out_single_overlay = Path(str(out_prefix) + f"_side{side}_overlay.png")
+                    plt.savefig(str(out_single_overlay), dpi=240)
+                    plt.close()
+                    print(f"Disk surface (side {side}) overlay saved to {out_single_overlay}")
+        except Exception as e:
+            print(f"Overlay rendering skipped due to error: {e}")
 
     # Helper: render per-track instability map (both sides) with shared color scale
     def _render_instability_map(instab_scores: dict, T: int, out_prefix: Path):
@@ -1576,6 +1920,7 @@ def analyze_disk(args):
         intervals_img = run_dir / f"{base_stem}_intervals.png"
         hist_img = run_dir / f"{base_stem}_histogram.png"
         heatmap_img = run_dir / f"{base_stem}_heatmap.png"
+        polar_overlay_img = run_dir / Path(f"{safe_label}_surface_disk_surface_overlay.png")
         polar_img = run_dir / Path(f"{safe_label}_surface_disk_surface.png")
         dens_img = run_dir / Path(f"{safe_label}_density_by_track.png")
         var_img = run_dir / Path(f"{safe_label}_variance_by_track.png")
@@ -1610,6 +1955,9 @@ def analyze_disk(args):
         if not instab_img.exists():
             alt = find_first(f"*{safe_label}_instability_map.png")
             if alt: instab_img = alt
+        if not polar_overlay_img.exists():
+            alt = find_first(f"*{safe_label}_surface_disk_surface_overlay.png")
+            if alt: polar_overlay_img = alt
         if not polar_img.exists():
             alt = find_first(f"*{safe_label}_surface_disk_surface.png")
             if alt: polar_img = alt
@@ -1650,7 +1998,7 @@ def analyze_disk(args):
         add_image_subplot(2, hist_img, 'Flux Interval Histogram')
         # Prefer instability map if present; otherwise show rev heatmap
         add_image_subplot(3, instab_img if instab_img.exists() else heatmap_img, 'Instability Map' if instab_img.exists() else 'Flux Heatmap (rev vs. position)')
-        add_image_subplot(4, polar_img, 'Disk Surface (density)')
+        add_image_subplot(4, polar_overlay_img if polar_overlay_img.exists() else polar_img, 'Disk Surface (density + overlay)' if polar_overlay_img.exists() else 'Disk Surface (density)')
         add_image_subplot(5, dens_img, 'Density by Track')
         add_image_subplot(6, var_img, 'Variance by Track')
 
@@ -2039,6 +2387,174 @@ def plan_pool(args):
     print(f"Pool plan saved to {out_path}")
     return 0
 
+def compare_reads(args):
+    """Compare multiple reads (>=2) of the same disk.
+    Inputs may be surface_map.json paths or directories containing them.
+    Outputs a summary JSON and per-track density CSV under run_dir/diff.
+    """
+    run_dir = get_output_dir(args.output_dir)
+    diff_dir = run_dir / 'diff'
+    diff_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve surface_map.json files from inputs
+    maps = []  # list of (label, path, surface_map)
+    for inp in args.inputs:
+        p = Path(inp)
+        sm_path = None
+        if p.is_dir():
+            hits = list(p.rglob('surface_map.json'))
+            if hits:
+                sm_path = hits[0]
+        elif p.is_file() and p.name.endswith('.json'):
+            sm_path = p
+        if sm_path is None:
+            print(f"No surface_map.json found under {inp}; skipping")
+            continue
+        try:
+            with open(sm_path, 'r') as f:
+                sm = json.load(f)
+            label = p.name if p.is_dir() else p.parent.name
+            maps.append((label, sm_path, sm))
+            print(f"Loaded {sm_path}")
+        except Exception as e:
+            print(f"Failed to load {sm_path}: {e}")
+
+    if len(maps) < 2:
+        print("Need at least 2 inputs for comparison")
+        return 1
+
+    # Helper to gather per-track mean density per side from a surface_map
+    def mean_density_by_track(sm: dict):
+        res = {0: {}, 1: {}}
+        for tk in sm:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            for side in [0, 1]:
+                vals = []
+                for e in sm.get(tk, {}).get(side, []):
+                    if isinstance(e, dict):
+                        d = e.get('analysis', {}).get('density_estimate_bits_per_rev')
+                        if isinstance(d, (int, float)):
+                            vals.append(float(d))
+                if vals:
+                    res[side][ti] = float(np.mean(vals))
+        return res
+
+    # Helper to compute overlay info by side
+    def overlay_info_by_side(sm: dict):
+        ov = sm.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(sm.get('global'), dict) else {}
+        bside = ov.get('by_side', {}) if isinstance(ov, dict) else {}
+        out = {}
+        for s in ['0','1']:
+            info = bside.get(s, {})
+            out[s] = {
+                'sector_count': info.get('sector_count'),
+                'boundaries_deg': info.get('boundaries_deg') or []
+            }
+        return out
+
+    # Collect per-read data
+    reads = []
+    for label, path, sm in maps:
+        reads.append({
+            'label': label,
+            'path': str(path),
+            'dens': mean_density_by_track(sm),
+            'overlay': overlay_info_by_side(sm),
+        })
+
+    # Compute union and intersection of tracks per side
+    common_tracks = {0: None, 1: None}
+    for side in [0, 1]:
+        track_sets = []
+        for r in reads:
+            track_sets.append(set(r['dens'][side].keys()))
+        common = set.intersection(*track_sets) if track_sets else set()
+        common_tracks[side] = sorted(common)
+
+    # Write per-track density table CSV
+    import csv
+    csv_path = diff_dir / 'diff_densities.csv'
+    with open(csv_path, 'w', newline='') as cf:
+        writer = csv.writer(cf)
+        header = ['track','side'] + [f"{r['label']}_dens" for r in reads]
+        writer.writerow(header)
+        for side in [0, 1]:
+            for ti in common_tracks[side]:
+                row = [ti, side]
+                for r in reads:
+                    row.append(r['dens'][side].get(ti))
+                writer.writerow(row)
+    print(f"Per-track density diff CSV saved to {csv_path}")
+
+    # Simple global stats per side for each read
+    def stats(vals):
+        if not vals:
+            return {"min": None, "max": None, "avg": None, "median": None, "std": None}
+        arr = np.array(vals, dtype=float)
+        return {
+            'min': float(np.min(arr)),
+            'max': float(np.max(arr)),
+            'avg': float(np.mean(arr)),
+            'median': float(np.median(arr)),
+            'std': float(np.std(arr)),
+        }
+
+    global_summary = { 'side0': [], 'side1': [] }
+    for r in reads:
+        for side_key, side in [('side0',0),('side1',1)]:
+            vals = list(r['dens'][side].values())
+            global_summary[side_key].append({ 'label': r['label'], **stats(vals) })
+
+    # Overlay differences (global per side): sector counts and boundary alignment error
+    def boundary_alignment_error(bases, comps):
+        # Return minimal mean abs difference (deg) between two lists by circular shift
+        if not bases or not comps or len(bases) != len(comps):
+            return None
+        bases = sorted(bases)
+        comps = sorted(comps)
+        n = len(bases)
+        best = None
+        for shift in range(n):
+            errs = []
+            for i in range(n):
+                a = bases[i]
+                b = comps[(i+shift) % n]
+                d = abs(a - b) % 360.0
+                d = min(d, 360.0 - d)
+                errs.append(d)
+            m = float(np.mean(errs))
+            best = m if best is None else min(best, m)
+        return best
+
+    overlay_cmp = { 'side0': {}, 'side1': {} }
+    for side_key, s in [('side0','0'),('side1','1')]:
+        sector_counts = [r['overlay'][s].get('sector_count') for r in reads]
+        overlay_cmp[side_key]['sector_counts'] = sector_counts
+        # Pairwise alignment against first read as baseline
+        base = reads[0]['overlay'][s]
+        base_b = base.get('boundaries_deg') or []
+        diffs = []
+        for r in reads[1:]:
+            comp_b = r['overlay'][s].get('boundaries_deg') or []
+            diffs.append(boundary_alignment_error(base_b, comp_b))
+        overlay_cmp[side_key]['boundary_avg_abs_diff_deg_vs_first'] = diffs
+
+    summary = {
+        'reads': [ {'label': r['label'], 'path': r['path']} for r in reads ],
+        'global_density_stats': global_summary,
+        'overlay_comparison': overlay_cmp,
+        'common_tracks': { 'side0': common_tracks[0], 'side1': common_tracks[1] },
+    }
+    with open(diff_dir / 'diff_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+    print(f"Diff summary saved to {diff_dir / 'diff_summary.json'}")
+    return 0
+
 def main():
     parser = argparse.ArgumentParser(
         description="FloppyAI: Flux Stream Analysis and Custom Encoding Tool"
@@ -2108,6 +2624,13 @@ def main():
     analyze_disk_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered human-readable summary report")
     analyze_disk_parser.add_argument("--summary-format", choices=["json", "text"], default="json", dest="summary_format", help="Summary output format: 'json' also writes llm_summary.json and renders narrative to txt (default), 'text' writes only txt")
     analyze_disk_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    analyze_disk_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type (forces classification and RPM family)")
+    # Optional format-aware overlay flags
+    analyze_disk_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
+    analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto/profile-based)")
+    analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha (default 0.35)")
+    analyze_disk_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color (default #00ff99)")
+    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode (default mfm)")
     analyze_disk_parser.set_defaults(func=analyze_disk)
 
     # Analyze Corpus command
@@ -2117,10 +2640,17 @@ def main():
     corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Scan for .raw under inputs, generate surface_map.json via analyze_disk where missing before aggregating")
     corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps (e.g., 360 or 300). If omitted, --profile or 360 is used.")
     corpus_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified)")
+    corpus_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type for generated runs and classification")
     corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
     corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or IP:port, default: localhost:1234)")
     corpus_parser.add_argument("--lm-model", default="local-model", help="LM model name to use (default: local-model)")
     corpus_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM corpus summary generation (default: 0.2)")
+    # Overlay flags to propagate into generated per-disk runs
+    corpus_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
+    corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays (0 = auto/profile-based)")
+    corpus_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha for generated runs (default 0.35)")
+    corpus_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color for generated runs (default #00ff99)")
+    corpus_parser.add_argument("--overlay-mode", choices=["mfm","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode (default mfm)")
     corpus_parser.set_defaults(func=analyze_corpus)
 
     # Classify Surface command
@@ -2137,6 +2667,12 @@ def main():
     pool_parser.add_argument("--top-percent", type=float, default=0.2, dest="top_percent", help="Top percentile of candidates to keep (0-1, default: 0.2)")
     pool_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     pool_parser.set_defaults(func=plan_pool)
+    
+    # Compare Reads command
+    cmp_parser = subparsers.add_parser("compare_reads", help="Compare multiple reads of the same disk (2+ surface_map.json paths or directories)")
+    cmp_parser.add_argument("inputs", nargs='+', help="Paths to surface_map.json or directories that contain them")
+    cmp_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    cmp_parser.set_defaults(func=compare_reads)
     
     args = parser.parse_args()
     if not args.command:
