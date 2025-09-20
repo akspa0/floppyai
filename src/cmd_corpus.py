@@ -90,7 +90,9 @@ def analyze_corpus(args):
                     cmd += ["--overlay-sectors-hint", str(osh)]
                 try:
                     print("Running:", " ".join(cmd))
-                    _sp.run(cmd, check=False)
+                    # Ensure module path is resolvable by setting CWD to repo root (parent of 'FloppyAI')
+                    repo_root = Path(__file__).resolve().parents[2]
+                    _sp.run(cmd, check=False, cwd=str(repo_root))
                 except Exception as _e:
                     print(f"Failed to run analyze_disk for {d}: {_e}")
                 # Verify that surface_map.json was produced; if missing, track it
