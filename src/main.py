@@ -15,6 +15,14 @@ from pathlib import Path
 import os
 
 from flux_analyzer import FluxAnalyzer
+from overlay_detection import (
+    detect_side_overlay_mfm,
+    detect_side_overlay_gcr,
+)
+from rendering import (
+    render_disk_surface,
+    render_instability_map,
+)
 from dtc_wrapper import DTCWrapper
 from custom_encoder import CustomEncoder
 from custom_decoder import CustomDecoder
@@ -25,6 +33,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import openai
+
+def _json_default(o):
+    try:
+        import numpy as _np
+        if isinstance(o, (_np.integer,)):
+            return int(o)
+        if isinstance(o, (_np.floating,)):
+            return float(o)
+        if isinstance(o, (_np.ndarray,)):
+            return o.tolist()
+    except Exception:
+        pass
+    if isinstance(o, Path):
+        return str(o)
+    if isinstance(o, set):
+        return list(o)
+    # Fallback stringification to avoid crashes
+    return str(o)
 
 def get_output_dir(output_dir=None):
     """Resolve output directory.
@@ -128,6 +154,7 @@ def analyze_corpus(args):
     # Optionally generate surface_map.json for directories containing .raw files
     if getattr(args, 'generate_missing', False) and base.is_dir():
         raw_dirs = {p.parent for p in base.rglob('*.raw')}
+        missing_maps = []
         for d in sorted(raw_dirs):
             try:
                 print(f"Generating surface map for {d} ...")
@@ -147,11 +174,18 @@ def analyze_corpus(args):
                     # Overlay flags propagated from corpus args
                     format_overlay=getattr(args, 'format_overlay', False),
                     angular_bins=getattr(args, 'angular_bins', 0),
-                    overlay_alpha=getattr(args, 'overlay_alpha', 0.35),
-                    overlay_color=getattr(args, 'overlay_color', '#00ff99'),
-                    overlay_mode=getattr(args, 'overlay_mode', 'mfm')
+                    overlay_alpha=getattr(args, 'overlay_alpha', 0.8),
+                    overlay_color=getattr(args, 'overlay_color', '#ff3333'),
+                    overlay_mode=getattr(args, 'overlay_mode', 'mfm'),
+                    gcr_candidates=getattr(args, 'gcr_candidates', '10,12,8,9,11,13'),
+                    overlay_sectors_hint=getattr(args, 'overlay_sectors_hint', None),
                 )
                 analyze_disk(disk_args)
+                # Verify that surface_map.json was produced; if missing, track it
+                smap = disk_dir / 'surface_map.json'
+                if not smap.exists():
+                    print(f"Warning: surface_map.json missing for {d}; skipping in corpus aggregation")
+                    missing_maps.append(str(smap))
                 # Copy/rename composite to a concise name per disk
                 comp_src = disk_dir / f"{safe}_composite_report.png"
                 comp_dst = disk_dir / f"{safe}_composite.png"
@@ -172,6 +206,15 @@ def analyze_corpus(args):
                         print(f"Warning: failed to copy polar surface for {label}: {e}")
             except Exception as e:
                 print(f"Failed to analyze {d}: {e}")
+        # Persist missing inputs list for transparency
+        try:
+            if missing_maps:
+                with open(corpus_dir / 'corpus_missing_inputs.txt', 'w') as mf:
+                    mf.write("The following per-disk runs did not produce surface_map.json (skipped):\n")
+                    for p in missing_maps:
+                        mf.write(str(p) + "\n")
+        except Exception:
+            pass
 
     if base.is_dir():
         found = {p for p in base.rglob('surface_map.json')}
@@ -338,7 +381,7 @@ def analyze_corpus(args):
 
     out_path = corpus_dir / 'corpus_summary.json'
     with open(out_path, 'w') as f:
-        json.dump(corpus_summary, f, indent=2)
+        json.dump(corpus_summary, f, indent=2, default=_json_default)
     print(f"Corpus summary saved to {out_path}")
 
     # Visualizations for corpus
@@ -622,7 +665,7 @@ def analyze_corpus(args):
                 }
                 llm_json = corpus_dir / 'llm_corpus_summary.json'
                 with open(llm_json, 'w') as jf:
-                    json.dump(parsed, jf, indent=2)
+                    json.dump(parsed, jf, indent=2, default=_json_default)
                 llm_txt = corpus_dir / 'llm_corpus_summary.txt'
                 with open(llm_txt, 'w') as tf:
                     tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
@@ -725,7 +768,7 @@ def analyze_corpus(args):
 
             llm_json = corpus_dir / 'llm_corpus_summary.json'
             with open(llm_json, 'w') as jf:
-                json.dump(parsed, jf, indent=2)
+                json.dump(parsed, jf, indent=2, default=_json_default)
             llm_txt = corpus_dir / 'llm_corpus_summary.txt'
             with open(llm_txt, 'w') as tf:
                 tf.write(f"FloppyAI LLM Corpus Summary - Generated on {datetime.datetime.now().isoformat()}\n\n")
@@ -777,7 +820,7 @@ def classify_surface(args):
     }
     out_path = run_dir / 'classification.json'
     with open(out_path, 'w') as f:
-        json.dump(out, f, indent=2)
+        json.dump(out, f, indent=2, default=_json_default)
     print(f"Classification saved to {out_path}")
     return 0
 
@@ -941,6 +984,31 @@ def analyze_disk(args):
     """Batch analyze .raw files from directory or single file to surface map."""
     run_dir = get_output_dir(args.output_dir)
     surface_map = {}  # {track: {side: list of {stats, analysis}}}
+    # Early stub write so consumers always find a surface_map.json even on failure
+    try:
+        try:
+            in_path = Path(args.input)
+            label = in_path.stem if in_path.is_file() else in_path.name
+        except Exception:
+            label = 'disk'
+        safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
+        surface_map['global'] = {
+            'meta': {
+                'label': safe_label,
+                'input': str(getattr(args, 'input', '')),
+                'timestamp': datetime.datetime.now().isoformat(),
+            },
+            'state': {
+                'status': 'starting',
+                'errors': [],
+            },
+            'insights': {},
+        }
+        out_map = run_dir / 'surface_map.json'
+        with open(out_map, 'w') as f:
+            json.dump(surface_map, f, indent=2, default=_json_default)
+    except Exception as _e_stub:
+        print(f"Warning: failed initial stub surface_map.json write: {_e_stub}")
     
     input_path = args.input
     raw_files = []
@@ -1144,6 +1212,8 @@ def analyze_disk(args):
         
         # Compute global stats
         density_class = None
+        density_source = None
+        density_confidence = None
         if len(global_flux) > 0:
             total_time = np.sum(global_flux)
             rev_time = total_time / max(1, total_revs)
@@ -1204,6 +1274,8 @@ def analyze_disk(args):
                     '525HD': '5.25" HD (1.2MB)',
                     '525DD': '5.25" DD (360KB)'
                 }[media_type]
+                density_source = 'override'
+                density_confidence = 1.0
             else:
                 # Decide family by RPM: ~300 => 3.5", ~360 => 5.25"
                 family = '35' if effective_rpm and effective_rpm <= 330 else '525'
@@ -1228,6 +1300,16 @@ def analyze_disk(args):
                     density_class = '3.5" HD (1.44MB)' if is_hd else '3.5" DD (720KB)'
                 else:
                     density_class = '5.25" HD (1.2MB)' if is_hd else '5.25" DD (360KB)'
+                density_source = 'heuristic'
+                # Rough confidence from how far mean interval is into HD band
+                try:
+                    mi = float(global_stats.get('mean_interval_ns') or 0.0)
+                    # Expect ~2000ns for HD 3.5, ~4000ns for DD 3.5
+                    hd_center, dd_center = 2000.0, 4000.0
+                    d_hd = abs(mi - hd_center); d_dd = abs(mi - dd_center)
+                    density_confidence = float(min(1.0, 1.0 / (1.0 + min(d_hd, d_dd) / 1000.0)))
+                except Exception:
+                    density_confidence = 0.5
 
             # RPM validation if provided/derived
             rpm_drift = None
@@ -1296,8 +1378,9 @@ def analyze_disk(args):
             else:
                 print("Skipping side heatmap: insufficient data on one or both sides")
 
-        # Single-sided detection (missing S1 or duplicated S0)
+        # Single-sided detection (missing S1 or duplicated S0) with stricter thresholds
         single_sided_reason = None
+        single_sided_confidence = 0.0
         try:
             Tdet = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
         except Exception:
@@ -1324,12 +1407,13 @@ def analyze_disk(args):
         c0 = int(has0.sum()); c1 = int(has1.sum())
         cov_ratio = (c1 / c0) if c0 > 0 else 0.0
         # Missing S1 if very low coverage on side 1 compared to side 0
-        if c0 >= 10 and cov_ratio < 0.05:
+        if c0 >= 12 and cov_ratio < 0.08:
             single_sided_reason = 'missing_s1'
+            single_sided_confidence = 0.8
         else:
             # Duplicated S0 if S1 matches S0 closely on overlapping tracks
             inter = has0 & has1
-            if int(inter.sum()) >= 8:
+            if int(inter.sum()) >= 16:
                 X = rad0[inter]; Y = rad1[inter]
                 mn = float(min(np.min(X), np.min(Y)))
                 mx = float(max(np.max(X), np.max(Y)))
@@ -1341,8 +1425,11 @@ def analyze_disk(args):
                 nx = float(np.linalg.norm(x)); ny = float(np.linalg.norm(y))
                 cos_sim = dot / (nx * ny + 1e-9)
                 mad = float(np.mean(np.abs(x - y)))
-                if cos_sim > 0.995 and mad < 0.05:
+                # Require some variance on S1 to avoid classifying flat noise as duplicate
+                var1 = float(np.var(Y))
+                if cos_sim > 0.997 and mad < 0.04 and var1 > 1e-6:
                     single_sided_reason = 'duplicated_s0'
+                    single_sided_confidence = 0.75
         
         # Prepare format-overlay metadata and detection (per-side)
         try:
@@ -1369,6 +1456,8 @@ def analyze_disk(args):
             gcr_candidates = [int(x.strip()) for x in str(gcand_arg).split(',') if x.strip()]
         except Exception:
             gcr_candidates = [10,12,8,9,11,13]
+        media_type = getattr(args, 'media_type', None)
+        eff_profile = profile or media_type
 
         def _detect_side_overlay_mfm(files: list, bins: int) -> tuple:
             """Return (sector_count, boundaries_deg, confidence) using FFT+ACF on aggregated angular hist.
@@ -1568,6 +1657,18 @@ def analyze_disk(args):
         bins = int(getattr(args, 'angular_bins', 0) or 720)
         by_side = {}
         per_track_detect = {}  # { side: {track: (sc,bdeg,conf,method)} }
+        overlay_warnings = []
+        overlay_diag = {'auto': {}}  # per-side diagnostics for auto mode
+        # Pre-warn about mode/profile mismatches
+        if ov_enabled_flag:
+            if ov_mode == 'gcr' and eff_profile == '35HD':
+                msg = 'GCR overlay requested on 3.5\" HD (MFM) profile; results may be meaningless. Use --overlay-mode mfm for 1.44MB.'
+                print('Warning:', msg)
+                overlay_warnings.append(msg)
+            if ov_mode == 'mfm' and eff_profile == '35DD':
+                msg = 'MFM overlay requested on 3.5\" DD (Mac GCR) profile; consider --overlay-mode gcr for 400K/800K.'
+                print('Warning:', msg)
+                overlay_warnings.append(msg)
         if ov_enabled_flag:
             for side in [0, 1]:
                 result_mfm = (None, [], 0.0)
@@ -1584,9 +1685,9 @@ def analyze_disk(args):
                     sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
                 else:
                     # auto: prefer higher confidence; if close or both low, bias by media/profile toward GCR for 3.5" DD
-                    media_type = getattr(args, 'media_type', None)
-                    prefer_gcr = (media_type == '35DD') or (profile == '35DD')
+                    prefer_gcr = (media_type == '35DD') or (eff_profile == '35DD')
                     mfm_c, gcr_c = result_mfm[2], result_gcr[2]
+                    overlay_diag['auto'][f'side{side}'] = {'mfm_conf': float(mfm_c), 'gcr_conf': float(gcr_c), 'prefer_gcr': bool(prefer_gcr)}
                     if (mfm_c < 0.25 and gcr_c >= 0.15) or (abs(mfm_c - gcr_c) <= 0.05 and prefer_gcr):
                         sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
                     else:
@@ -1594,10 +1695,16 @@ def analyze_disk(args):
                             sc, bdeg, conf = result_mfm; method = 'fft+acf'
                         else:
                             sc, bdeg, conf = result_gcr; method = 'gcr-contrast'
+                    # Log the decision
+                    print(f"Overlay(auto) side {side}: mfm_conf={mfm_c:.3f}, gcr_conf={gcr_c:.3f}, prefer_gcr={prefer_gcr} -> method={method}, k={(sc if sc else 'NA')}, conf={conf:.3f}")
+                    if method == 'gcr-contrast' and eff_profile == '35HD':
+                        overlay_warnings.append('Auto chose GCR on 3.5\" HD (MFM) profile; verify this is intended.')
+                    if method == 'fft+acf' and eff_profile == '35DD':
+                        overlay_warnings.append('Auto chose MFM on 3.5\" DD (GCR) profile; consider --overlay-mode gcr if this is a Mac disk.')
                 # Fallback to hint if detection failed
                 if (not sc or sc < 2):
-                    if ov_mode == 'mfm' and profile in overlay_sector_defaults:
-                        sc = overlay_sector_defaults[profile]
+                    if ov_mode == 'mfm' and eff_profile in overlay_sector_defaults:
+                        sc = overlay_sector_defaults[eff_profile]
                         step = 360.0 / float(sc)
                         bdeg = [k*step for k in range(sc)]
                         conf = max(conf, 0.2)
@@ -1706,14 +1813,33 @@ def analyze_disk(args):
                     'mode': getattr(args, 'overlay_mode', 'mfm'),
                     'sector_count_hint': overlay_sectors_hint,
                     'by_side': by_side,
+                    'warnings': overlay_warnings,
+                    'diagnostics': overlay_diag,
+                },
+                'classification': {
+                    'label': density_class,
+                    'source': density_source,
+                    'confidence': float(density_confidence) if density_confidence is not None else None,
+                    'media_type': media_type or profile,
                 }
             }
         }
+        # Ensure state/meta are preserved and mark completion
+        try:
+            surface_map['global'].setdefault('meta', {})
+            surface_map['global']['meta'].update({
+                'label': surface_map['global']['insights'].get('classification', {}).get('label', safe_label),
+                'input': str(getattr(args, 'input', '')),
+                'timestamp': datetime.datetime.now().isoformat(),
+            })
+            surface_map['global']['state'] = {'status': 'complete', 'errors': []}
+        except Exception:
+            pass
         # Persist surface map with overlay metadata for corpus discovery
         try:
             out_map = run_dir / 'surface_map.json'
             with open(out_map, 'w') as f:
-                json.dump(surface_map, f, indent=2)
+                json.dump(surface_map, f, indent=2, default=_json_default)
             print(f"Surface map saved to {out_map}")
         except Exception as e:
             print(f"Failed to write surface_map.json: {e}")
@@ -1721,7 +1847,7 @@ def analyze_disk(args):
         try:
             overlay_info = surface_map.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(surface_map.get('global'), dict) else {}
             with open(run_dir / 'overlay_debug.json', 'w') as of:
-                json.dump(overlay_info, of, indent=2)
+                json.dump(overlay_info, of, indent=2, default=_json_default)
             print(f"Overlay debug saved to {run_dir / 'overlay_debug.json'}")
         except Exception as e:
             print(f"Failed to write overlay_debug.json: {e}")
@@ -1985,11 +2111,11 @@ def analyze_disk(args):
         except Exception:
             label = 'disk'
         safe_label = re.sub(r'[^A-Za-z0-9_.-]', '_', label)
-        _render_disk_surface(surface_map, run_dir / Path(f'{safe_label}_surface'))
+        render_disk_surface(surface_map, run_dir / Path(f'{safe_label}_surface'), args)
         # Render instability map using per-track scores if available
         try:
             T = max([int(k) for k in surface_map.keys() if k != 'global'], default=83) + 1
-            _render_instability_map(instab_by_side, T, run_dir / Path(f'{safe_label}'))
+            render_instability_map(instab_by_side, T, run_dir / Path(f'{safe_label}'))
         except Exception as e2:
             print(f"Instability map generation failed: {e2}")
         print("Disk surface plot saved (<label>_surface_disk_surface.png)")
@@ -2190,6 +2316,10 @@ def analyze_disk(args):
                 with open(run_dir / f"{safe_label}_classification.txt", 'w') as cf:
                     if density_class:
                         cf.write(f"density_class={density_class}\n")
+                        if density_source:
+                            cf.write(f"density_source={density_source}\n")
+                        if density_confidence is not None:
+                            cf.write(f"density_confidence={density_confidence}\n")
                     cf.write(f"mean_interval_ns={global_stats.get('mean_interval_ns')}\n")
                     ss = surface_map.get('global', {}).get('insights', {}).get('single_sided_reason')
                     if ss:
@@ -2466,7 +2596,7 @@ def analyze_disk(args):
             parsed_json = _sanitize(parsed_json)
             json_path = run_dir / "llm_summary.json"
             with open(json_path, 'w') as jf:
-                json.dump(parsed_json, jf, indent=2, allow_nan=False)
+                json.dump(parsed_json, jf, indent=2, allow_nan=False, default=_json_default)
 
             # Render text if requested or default
             summary_path = run_dir / "llm_summary.txt"
@@ -2546,7 +2676,7 @@ def plan_pool(args):
 
     out_path = run_dir / 'pool_plan.json'
     with open(out_path, 'w') as f:
-        json.dump(plan, f, indent=2)
+        json.dump(plan, f, indent=2, default=_json_default)
     print(f"Pool plan saved to {out_path}")
     return 0
 
@@ -2714,7 +2844,7 @@ def compare_reads(args):
         'common_tracks': { 'side0': common_tracks[0], 'side1': common_tracks[1] },
     }
     with open(diff_dir / 'diff_summary.json', 'w') as f:
-        json.dump(summary, f, indent=2)
+        json.dump(summary, f, indent=2, default=_json_default)
     print(f"Diff summary saved to {diff_dir / 'diff_summary.json'}")
     return 0
 
@@ -2791,10 +2921,11 @@ def main():
     # Optional format-aware overlay flags
     analyze_disk_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
     analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto/profile-based)")
-    analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha (default 0.35)")
-    analyze_disk_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color (default #00ff99)")
+    analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha (default 0.8)")
+    analyze_disk_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color (default #ff3333)")
     analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
     analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
+    analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive")
     analyze_disk_parser.set_defaults(func=analyze_disk)
 
     # Analyze Corpus command
@@ -2812,10 +2943,11 @@ def main():
     # Overlay flags to propagate into generated per-disk runs
     corpus_parser.add_argument("--format-overlay", action="store_true", dest="format_overlay", help="Render format-aware sector overlays on polar maps (heuristic)")
     corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays (0 = auto/profile-based)")
-    corpus_parser.add_argument("--overlay-alpha", type=float, default=0.35, dest="overlay_alpha", help="Overlay line alpha for generated runs (default 0.35)")
-    corpus_parser.add_argument("--overlay-color", default="#00ff99", dest="overlay_color", help="Overlay line color for generated runs (default #00ff99)")
+    corpus_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha for generated runs (default 0.8)")
+    corpus_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color for generated runs (default #ff3333)")
     corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode: mfm, gcr, or auto (default mfm)")
     corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates (default: 10,12,8,9,11,13)")
+    corpus_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive (propagated to per-disk runs)")
     corpus_parser.set_defaults(func=analyze_corpus)
 
     # Classify Surface command
