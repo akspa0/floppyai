@@ -56,6 +56,43 @@ python -m FloppyAI.src.main --help
 ```
 - Alternate: from `FloppyAI/src/` you can run `python main.py ...` but some subprocess flows assume module invocation from root.
 
+## Documentation
+
+- Docs Index: [docs/index.md](docs/index.md)
+- Usage Guide: [docs/usage.md](docs/usage.md)
+- Cheatsheet: [docs/cheatsheet.md](docs/cheatsheet.md)
+
+## Common Tasks
+
+- Analyze a full disk (PC 3.5" HD with MFM overlays)
+  ```bash
+  python -m FloppyAI.src.main analyze_disk .\stream_dumps\1.44\win95boot\0 \
+    --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
+    --output-dir .\test_outputs\win95_0
+  ```
+
+- Analyze a Mac GCR disk (400K/800K) with zoned overlays
+  ```bash
+  python -m FloppyAI.src.main analyze_disk .\stream_dumps\macdisk \
+    --media-type 35DD --format-overlay --overlay-mode gcr \
+    --gcr-candidates "12,10,8,9,11,13" --angular-bins 900 \
+    --output-dir .\test_outputs\macdisk
+  ```
+
+- Compare two reads (requires each to have surface_map.json)
+  ```bash
+  python -m FloppyAI.src.main compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
+    --output-dir .\test_outputs\diff_win95
+  ```
+
+- Build a corpus and auto-generate missing per-disk maps
+  ```bash
+  python -m FloppyAI.src.main analyze_corpus .\stream_dumps \
+    --generate-missing --media-type 35HD \
+    --format-overlay --overlay-mode mfm --angular-bins 720 \
+    --output-dir .\test_outputs\corpus
+  ```
+
 ### analyze_corpus
 ```
 python -m FloppyAI.src.main analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] \
