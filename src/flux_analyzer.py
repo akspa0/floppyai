@@ -324,7 +324,13 @@ class FluxAnalyzer:
             'header_text': header_text,
         }
 
-    def analyze(self, angular_bins: int | None = None):
+    def analyze(
+        self,
+        angular_bins: int | None = None,
+        interval_hist_bins: int | None = 96,
+        interval_hist_min_ns: float = 150.0,
+        interval_hist_max_ns: float = 60000.0,
+    ):
         """
         Analyze flux data for noise, anomalies, weak bits.
         
@@ -401,12 +407,35 @@ class FluxAnalyzer:
                 m = float(np.max(hist)) if np.max(hist) > 0 else 1.0
                 angular_hist = (hist / m).tolist()
 
+        # Optional interval histogram (log-spaced over [min_ns, max_ns])
+        interval_hist = None
+        ih_bins = 0
+        ih_range = None
+        try:
+            if interval_hist_bins and self.flux_data is not None and self.flux_data.size > 0:
+                vals = self.flux_data.astype(np.float64)
+                mn = max(float(interval_hist_min_ns), 1.0)
+                mx = max(float(interval_hist_max_ns), mn + 1.0)
+                ih_bins = int(interval_hist_bins)
+                # Log-space edges
+                edges = np.logspace(np.log10(mn), np.log10(mx), ih_bins + 1)
+                h, _ = np.histogram(vals, bins=edges)
+                if np.max(h) > 0:
+                    h = h.astype(np.float64) / float(np.max(h))
+                interval_hist = h.tolist()
+                ih_range = [mn, mx]
+        except Exception:
+            pass
+
         return {
             'anomalies': anomalies,
             'noise_profile': noise_profile,
             'density_estimate_bits_per_rev': dens_est,
             'angular_bins': (bins if bins and bins > 0 else None),
-            'angular_hist': angular_hist
+            'angular_hist': angular_hist,
+            'interval_hist_bins': (ih_bins if ih_bins > 0 else None),
+            'interval_hist_range_ns': ih_range,
+            'interval_hist': interval_hist,
         }
 
     def visualize(self, base_path, plot_type='intervals'):

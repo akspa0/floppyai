@@ -20,6 +20,7 @@ from rendering import (
     render_disk_surface,
     render_instability_map,
     render_single_track_detail,
+    render_side_report,
 )
 from utils.json_io import dump_json
 
@@ -182,16 +183,8 @@ def run(args):
             ang_bins = int(getattr(args, 'angular_bins', 0) or 0)
             analysis = analyzer.analyze(ang_bins if ang_bins > 0 else None)
 
-            # Emit per-file flux visualizations to prove decoded flux content
-            try:
-                base_file_prefix = str((run_dir / Path(raw_file).stem))
-                analyzer.visualize(base_file_prefix, 'intervals')
-                analyzer.visualize(base_file_prefix, 'histogram')
-                if len(analyzer.revolutions) > 1:
-                    analyzer.visualize(base_file_prefix, 'heatmap')
-                log(f"  Saved flux plots: {Path(base_file_prefix).name}_intervals.png, _hist.png")
-            except Exception as ve:
-                log(f"  Visualization error for {raw_file}: {ve}")
+            # Per-file plots disabled by default to reduce output volume and speed up runs.
+            # If needed, we can gate this behind a CLI flag in the future.
 
             # Create track entry
             track_key = str(track_num)
@@ -323,6 +316,14 @@ def run(args):
                 instab_scores[s][ti] = float(min(1.0, max(0.0, v / vmax)))
 
         render_instability_map(instab_scores, max_track + 1, base_name)
+
+        # Per-side composite reports (one PNG per side)
+        try:
+            for s in [0, 1]:
+                render_side_report(surface_map, instab_scores, s, base_name, args)
+                log(f"Saved side report for side {s}")
+        except Exception as e:
+            log(f"Warning: Side report rendering failed: {e}")
 
         log(f"Visualizations saved in {run_dir}")
 
