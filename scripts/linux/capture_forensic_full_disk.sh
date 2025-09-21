@@ -51,7 +51,7 @@ USAGE
 
 # Defaults
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 OUT_DIR="./captures"
 LABEL="full-disk"
 USE_SUDO=1
@@ -116,11 +116,11 @@ fi
 TS=$(date +"%Y%m%d_%H%M%S")
 RUN_DIR="$OUT_DIR/${LABEL}_${TS}"
 mkdir -p "$RUN_DIR"
-LOG_PATH="$RUN_DIR/run.log"
 
 SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
 pushd "$RUN_DIR" >/dev/null
+LOG_FILE="run.log"
 
 {
   echo "capture_forensic_full_disk.sh run at $(date -Iseconds)"
@@ -130,27 +130,27 @@ pushd "$RUN_DIR" >/dev/null
   echo
   echo "Profile: ${PROFILE}  Sides: ${SIDES}  Tracks: ${START_TRACK}..${END_TRACK} step ${STEP}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
-} > "$LOG_PATH"
+} > "$LOG_FILE"
 
 run_read() {
   local track=$1 side=$2
   # Run within RUN_DIR and use simple prefix 'track' so files are track%02d.%d.raw
   local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
   echo "[READ ] $cmd"
-  echo "[READ ] $cmd" >> "$LOG_PATH"
+  echo "[READ ] $cmd" >> "$LOG_FILE"
   if [[ $DRY_RUN -eq 0 ]]; then
-    bash -lc "$cmd" | tee -a "$LOG_PATH"
+    bash -lc "$cmd" | tee -a "$LOG_FILE"
   fi
 }
 
 capture_side() {
   local side=$1
-  echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_PATH"
+  echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_FILE"
   sleep "$SPINUP"
   local t=$START_TRACK
   while (( t <= END_TRACK )); do
     run_read "$t" "$side"
-    echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"
+    echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_FILE"
     sleep "$COOLDOWN"
     t=$(( t + STEP ))
   done
@@ -164,5 +164,5 @@ if [[ "$SIDES" == "both" || "$SIDES" == "1" ]]; then
   capture_side 1
 fi
 
-echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_FILE"
 popd >/dev/null

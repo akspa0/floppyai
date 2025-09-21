@@ -42,7 +42,7 @@ USAGE
 
 IMAGE_DIR=""
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 TRACKS_SPEC=""
 SIDES_SPEC="0,1"
 REVS=3

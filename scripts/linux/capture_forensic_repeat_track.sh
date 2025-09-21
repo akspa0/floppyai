@@ -38,7 +38,7 @@ USAGE
 # Defaults
 TRACK=""; SIDE=""
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 OUT_DIR="./captures"
 LABEL="repeat"
 USE_SUDO=1

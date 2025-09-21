@@ -36,7 +36,7 @@ USAGE
 # Defaults
 TRACK=""; SIDE=""
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 OUT_DIR="./captures"
 LABEL="longrev"
 USE_SUDO=1
@@ -75,8 +75,10 @@ fi
 TS=$(date +"%Y%m%d_%H%M%S")
 RUN_DIR="$OUT_DIR/${LABEL}_t$(printf '%02d' "$TRACK")_s${SIDE}_${TS}"
 mkdir -p "$RUN_DIR"
-LOG_PATH="$RUN_DIR/run.log"
 SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
+
+pushd "$RUN_DIR" >/dev/null
+LOG_FILE="run.log"
 
 {
   echo "capture_forensic_long_rev.sh run at $(date -Iseconds)"
@@ -84,20 +86,21 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
   echo "dtc version:"; "$DTC_BIN" -V || true; echo
   echo "Track: ${TRACK}  Side: ${SIDE}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
-} > "$LOG_PATH"
+} > "$LOG_FILE"
 
-echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_PATH"; sleep "$SPINUP"
+echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_FILE"; sleep "$SPINUP"
 
 # Capture
 TS2=$(date +"%Y%m%d_%H%M%S")
 # Use a standard prefix so dtc writes track%02d.%d.raw under RUN_DIR
 PREFIX="$RUN_DIR/track"
 CMD="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -ftrack"
-echo "[READ ] $CMD" | tee -a "$LOG_PATH"
+echo "[READ ] $CMD" | tee -a "$LOG_FILE"
 if [[ $DRY_RUN -eq 0 ]]; then
-  eval "$CMD" | tee -a "$LOG_PATH"
+  eval "$CMD" | tee -a "$LOG_FILE"
 fi
 
-echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"; sleep "$COOLDOWN"
+echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_FILE"; sleep "$COOLDOWN"
 
-echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_FILE"
+popd >/dev/null

@@ -39,7 +39,7 @@ USAGE
 
 # Defaults
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 OUT_DIR="./captures"
 LABEL="sweep"
 USE_SUDO=1

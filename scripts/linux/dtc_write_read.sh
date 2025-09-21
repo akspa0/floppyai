@@ -48,7 +48,7 @@ TRACK=""
 SIDE=""
 REVS=3
 DRIVE=0
-DTC_BIN="dtc"
+DTC_BIN="/usr/bin/dtc"
 OUT_DIR="./captures"
 LABEL=""
 USE_SUDO=1
@@ -115,11 +115,13 @@ fi
   echo
 } >"$LOG_PATH"
 
-WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i21 -f'${WRITE_INPUT}' -t${TRACK} -s${SIDE} -w")
+WRITE_DIR=$(dirname "${WRITE_INPUT}")
+WRITE_BASE=$(basename "${WRITE_INPUT}")
+pushd "$WRITE_DIR" >/dev/null
+WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -wi4 -f${WRITE_BASE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
 
 # For read, run within OUT_DIR and use a prefix so DTC creates BASE_NAME%02d.%d.raw
-pushd "$OUT_DIR" >/dev/null
-READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -t${TRACK} -s${SIDE} -r${REVS} -f${BASE_NAME}")
+READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -f${BASE_NAME}")
 
 echo "[WRITE] ${WRITE_CMD[*]}"
 echo "[READ ] ${READ_CMD[*]}"
@@ -136,6 +138,8 @@ fi
 # Execute
 # shellcheck disable=SC2068
 eval ${WRITE_CMD[@]} | tee -a "$LOG_PATH"
+popd >/dev/null
+pushd "$OUT_DIR" >/dev/null
 # shellcheck disable=SC2068
 eval ${READ_CMD[@]} | tee -a "$LOG_PATH"
 popd >/dev/null
