@@ -59,6 +59,7 @@ import matplotlib.pyplot as plt
 import json
 import openai
 from utils.json_io import dump_json
+from profiles_loader import get as get_profile, safe_max_tracks as profile_safe_max, resolve_rpm as profile_resolve_rpm
 
 def _json_default(o):
     try:
@@ -154,40 +155,14 @@ def analyze_stream(args):
     return 0
 
 def _profile_safe_max(profile: str | None) -> int:
-    if not profile:
-        return 81
-    if profile.startswith('35'):
-        return 81
-    if profile.startswith('525'):
-        return 81
-    return 80
+    # Backwards-compatible shim using JSON profiles
+    prof = get_profile(profile) if profile else None
+    return profile_safe_max(prof)
 
 def _resolve_rpm(profile: str | None, rpm_arg: float | None, context: str = "") -> float:
-    """Resolve an effective RPM from profile or explicit rpm.
-    If neither provided, default to 300.0 and print a helpful warning once per call site.
-    """
-    # Map of common profiles to RPM
-    rpm_profile_map = {
-        '35HD': 300.0,
-        '35DD': 300.0,
-        '35HDGCR': 300.0,
-        '35DDGCR': 300.0,
-        '525HD': 360.0,
-        '525DD': 300.0,
-        '525DDGCR': 300.0,
-    }
-    if rpm_arg is not None:
-        return float(rpm_arg)
-    if profile in rpm_profile_map:
-        return rpm_profile_map[profile]
-    # Fallback default with warning
-    try:
-        msg_ctx = f" for {context}" if context else ""
-        print(f"[Warning] No profile or RPM provided{msg_ctx}; defaulting to RPM=300.0. "
-              f"Pass --profile or --rpm to override.")
-    except Exception:
-        pass
-    return 300.0
+    # Backwards-compatible shim using JSON profiles
+    prof = get_profile(profile) if profile else None
+    return profile_resolve_rpm(prof, rpm_arg, context=context)
 
 def _parse_tracks(tracks_arg: str | None, default_max: int) -> list[int]:
     if not tracks_arg:
@@ -1636,9 +1611,9 @@ def main():
         except Exception:
             prof = None
         rpm_eff = getattr(args, 'rpm', None)
-        if rpm_eff is None and prof is None:
-            # Default to 300 with warning for normalization/validation
-            args.rpm = _resolve_rpm(None, None, context="analyze_disk")
+        if rpm_eff is None:
+            # If profile provided, resolve from profile; else default to 300 with warning
+            args.rpm = _resolve_rpm(prof, None, context="analyze_disk")
         return (analyze_disk_cmd(args) if analyze_disk_cmd else (print("analyze_disk not available"), 1)[1])
 
     analyze_disk_parser.set_defaults(func=_run_analyze_disk_with_warning)
