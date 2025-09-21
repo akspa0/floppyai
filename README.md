@@ -57,6 +57,7 @@ python -m FloppyAI.src.main --help
 - Docs Index: [docs/index.md](docs/index.md)
 - Usage Guide: [docs/usage.md](docs/usage.md)
 - Cheatsheet: [docs/cheatsheet.md](docs/cheatsheet.md)
+- Experiments: Silkscreening (Image→Flux): [docs/experiments/silkscreening.md](docs/experiments/silkscreening.md)
 
 ## Common Tasks
 
