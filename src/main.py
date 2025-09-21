@@ -155,9 +155,9 @@ def analyze_stream(args):
 
 def _profile_safe_max(profile: str | None) -> int:
     if not profile:
-        return 80
+        return 81
     if profile.startswith('35'):
-        return 80
+        return 81
     if profile.startswith('525'):
         return 81
     return 80

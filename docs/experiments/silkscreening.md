@@ -47,7 +47,7 @@ Use any image; it will be resampled to the (tracks × angle) polar grid.
 ```powershell
 python FloppyAI/src/main.py silkscreen .\my_image.png \
   --side 0 \
-  --tracks 0-79 \
+  --tracks 0-81 \
   --rpm 300 \
   --avg-interval-ns 2200 \
   --disk-name my_image_hd
@@ -103,10 +103,10 @@ Write generated streams to disk:
 # -s  : side
 
 # Side 0
-sudo dtc -i21 -f /path/to/wedges_test/track -w -t 0-79 -s 0
+sudo dtc -i21 -f /path/to/wedges_test/track -w -t 0-81 -s 0
 
 # Side 1 (if desired to rewrite blank or alternate content)
-sudo dtc -i21 -f /path/to/wedges_test/track -w -t 0-79 -s 1
+sudo dtc -i21 -f /path/to/wedges_test/track -w -t 0-81 -s 1
 ```
 
 Forensic-rich read-back capture (example: 16 revolutions per track, side 0 and 1):
@@ -118,8 +118,8 @@ Forensic-rich read-back capture (example: 16 revolutions per track, side 0 and 1
 # -t  : track range
 # -s  : side
 
-sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-79 -s 0
-sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-79 -s 1
+sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-81 -s 0
+sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-81 -s 1
 ```
 
 Recommendations:
