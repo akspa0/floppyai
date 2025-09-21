@@ -126,15 +126,43 @@ def run(args):
     if user_bins > 0:
         effective_ang_bins = user_bins
     else:
-        effective_ang_bins = 720 if q in ('high', 'ultra') else 360
+        # Use higher angular resolution for high/ultra
+        effective_ang_bins = 1440 if q in ('high', 'ultra') else 360
     overlay_cfg['angular_bins'] = effective_ang_bins
-    # If profile suggests MFM, default overlay mode to mfm
-    default_overlay_mode = 'mfm' if (profile in ['35HD', '35DD', '525HD', '525DD'] or inferred_rpm == 300.0) else 'mfm'
-    overlay_mode = getattr(args, 'overlay_mode', default_overlay_mode)
+    # Resolve overlay mode and candidates from profile to minimize CLI
+    prof = (profile or '').upper()
+    is_gcr_profile = prof in ('35DDGCR', '35HDGCR', '525DDGCR')
+    user_overlay = str(getattr(args, 'overlay_mode', 'auto')).lower()
+    # Auto picks from profile; otherwise honor explicit
+    if user_overlay == 'auto':
+        overlay_mode = 'gcr' if is_gcr_profile else 'mfm'
+    else:
+        overlay_mode = user_overlay
+    # Warn on obvious mismatches (non-fatal)
+    try:
+        if overlay_mode == 'gcr' and prof in ('35HD','35DD','525HD','525DD'):
+            log("Note: MFM profile with GCR overlay mode; results may be misleading. Consider --overlay-mode mfm or a GCR profile like 35DDGCR.")
+        if overlay_mode == 'mfm' and is_gcr_profile:
+            log("Note: GCR profile with MFM overlay mode; results may be misleading. Consider --overlay-mode auto/gcr.")
+    except Exception:
+        pass
     overlay_cfg['overlay_mode'] = overlay_mode
-    # Only include gcr_candidates for gcr/auto modes to avoid confusion on MFM media
-    if overlay_mode in ['gcr', 'auto']:
-        overlay_cfg['gcr_candidates'] = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+    # Determine GCR candidates by profile unless user provided
+    if overlay_mode == 'gcr':
+        user_gc = getattr(args, 'gcr_candidates', None)
+        if user_gc:
+            gc_candidates = str(user_gc)
+        else:
+            if prof in ('35DDGCR','35HDGCR'):
+                # Apple 400K/800K zone counts outer->inner ~12..8
+                gc_candidates = '12,11,10,9,8'
+            elif prof == '525DDGCR':
+                # Apple II 5.25"
+                gc_candidates = '16'
+            else:
+                # Generic fallback
+                gc_candidates = '10,12,8,9,11,13'
+        overlay_cfg['gcr_candidates'] = gc_candidates
 
     # Process each raw file
     processed_count = 0
@@ -227,7 +255,10 @@ def run(args):
                     elif mode == 'mfm':
                         k, bdeg, conf = detect_side_overlay_mfm(files, bins)
                     elif mode == 'gcr':
-                        gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+                        # Prefer profile-derived candidates from overlay_cfg
+                        gc_raw = surface_map['global']['insights'].get('overlay', {}).get('gcr_candidates', None)
+                        if not gc_raw:
+                            gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
                         cand = []
                         for tok in str(gc_raw).replace(' ', '').split(','):
                             try:
@@ -238,7 +269,9 @@ def run(args):
                     elif mode == 'auto':
                         # Try MFM then GCR, keep higher confidence
                         k1, b1, c1 = detect_side_overlay_mfm(files, bins)
-                        gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+                        gc_raw = surface_map['global']['insights'].get('overlay', {}).get('gcr_candidates', None)
+                        if not gc_raw:
+                            gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
                         cand = []
                         for tok in str(gc_raw).replace(' ', '').split(','):
                             try:
@@ -330,7 +363,7 @@ def run(args):
                     agg = agg / float(np.max(agg))
                 return (agg if used > 0 else None), bins
 
-            def heuristic_k_from_hist(hist: np.ndarray, bins: int):
+            def heuristic_k_from_hist(hist: np.ndarray, bins: int, allowed: list[int] | None = None):
                 # FFT-based periodicity strength
                 if hist is None or bins <= 0:
                     return None, 0.0
@@ -339,7 +372,10 @@ def run(args):
                 # Ignore DC
                 H[0] = 0.0
                 # Candidate k range
-                candidates = list(range(6, min(36, bins // 2)))
+                if isinstance(allowed, list) and allowed:
+                    candidates = [k for k in allowed if isinstance(k, int) and 2 <= k <= max(2, bins // 2)]
+                else:
+                    candidates = list(range(6, min(36, bins // 2)))
                 if not candidates:
                     return None, 0.0
                 peak_vals = [(k, H[k] if k < len(H) else 0.0) for k in candidates]
@@ -366,7 +402,23 @@ def run(args):
                 else:
                     # Heuristic
                     hist, bins = aggregate_side_hist(s)
-                    k, conf = heuristic_k_from_hist(hist, bins)
+                    # Restrict heuristic k based on overlay_mode
+                    allowed = None
+                    try:
+                        if str(overlay_mode).lower() == 'gcr':
+                            gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+                            allowed = []
+                            for tok in str(gc_raw).replace(' ', '').split(','):
+                                try:
+                                    allowed.append(int(tok))
+                                except Exception:
+                                    continue
+                        elif str(overlay_mode).lower() == 'mfm':
+                            # Common MFM sector counts (not exhaustive)
+                            allowed = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19]
+                    except Exception:
+                        allowed = None
+                    k, conf = heuristic_k_from_hist(hist, bins, allowed)
                     if k is not None and conf > 0.4:
                         entry = {
                             'formatted': True,
@@ -447,7 +499,7 @@ def run(args):
                 for ti, v in list(instab_scores[s].items()):
                     instab_scores[s][ti] = float(min(1.0, max(0.0, v / vmax)))
 
-        render_instability_map(instab_scores, max_track + 1, base_name)
+        render_instability_map(surface_map, instab_scores, max_track + 1, base_name)
 
         # Create polar surface maps (pass args so overlay flags propagate)
         render_disk_surface(surface_map, base_name, args)

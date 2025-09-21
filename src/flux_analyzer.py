@@ -379,9 +379,13 @@ class FluxAnalyzer:
         trans_per_rev = [len(rev) for rev in self.revolutions if isinstance(rev, np.ndarray) and len(rev) > 0]
         dens_est = int(float(np.mean(trans_per_rev))) if trans_per_rev else 0
 
-        # Optional angular histogram over revolutions
+        # Optional angular histogram over revolutions (with phase alignment)
         angular_hist = None
-        per_rev_hists = []  # for instability computations
+        per_rev_hists = []        # normalized per-rev histograms (pre-align)
+        per_rev_hists_al = []     # aligned per-rev histograms
+        per_rev_shifts_bins = []  # circular shift applied to align each rev (bins)
+        per_angle_variance = None # variance across aligned revs per angle
+        instability_theta = None  # normalized angular-resolved instability profile (0..1)
         if angular_bins is None:
             angular_bins = 0
         try:
@@ -389,7 +393,7 @@ class FluxAnalyzer:
         except Exception:
             bins = 0
         if bins and bins > 0 and self.revolutions:
-            hist_sum = np.zeros(bins, dtype=float)
+            # Build per-rev histograms
             for rev in self.revolutions:
                 if not isinstance(rev, np.ndarray) or rev.size < 4:
                     continue
@@ -400,13 +404,40 @@ class FluxAnalyzer:
                 idx = np.floor((t / total) * bins).astype(int)
                 idx[idx >= bins] = bins - 1
                 h = np.bincount(idx, minlength=bins).astype(np.float64)
-                # Normalize each rev hist by its max for stability (0..1)
                 hm = float(np.max(h))
                 per_rev_hists.append(h / hm if hm > 0 else h)
-                hist_sum += h
+
+            # Phase alignment by circular cross-correlation to reference (mean of first few revs)
             if len(per_rev_hists) > 0:
-                m = float(np.max(hist_sum)) if np.max(hist_sum) > 0 else 1.0
-                angular_hist = (hist_sum / m).tolist()
+                H = np.stack(per_rev_hists, axis=0)  # [R, bins]
+                ref = np.mean(H[: min(4, H.shape[0])], axis=0)
+                # Compute FFT of reference once
+                RF = np.fft.rfft(ref)
+                for row in H:
+                    # circular cross-correlation via FFT
+                    F = np.fft.rfft(row)
+                    cc = np.fft.irfft(F * np.conj(RF))
+                    shift = int(np.argmax(cc))  # bins to roll so peak aligns
+                    per_rev_shifts_bins.append(shift)
+                    per_rev_hists_al.append(np.roll(row, -shift))
+                H_al = np.stack(per_rev_hists_al, axis=0) if per_rev_hists_al else H
+                # Angular histogram from aligned stack
+                hist_sum_al = np.sum(H_al, axis=0)
+                max_sum = float(np.max(hist_sum_al)) if H_al.size else 0.0
+                if max_sum > 0:
+                    angular_hist = (hist_sum_al / max_sum).tolist()
+                else:
+                    angular_hist = (np.mean(H, axis=0)).tolist()
+                # Per-angle variance across aligned revs
+                var_bins = np.var(H_al, axis=0) if H_al.shape[0] >= 2 else np.zeros(bins, dtype=float)
+                # Normalize variance to 0..1 for rendering
+                vmax = float(np.max(var_bins)) if var_bins.size else 0.0
+                if vmax > 0:
+                    per_angle_variance = (var_bins / vmax).tolist()
+                    instability_theta = per_angle_variance
+                else:
+                    per_angle_variance = [0.0] * bins
+                    instability_theta = per_angle_variance
 
         # Optional interval histogram (log-spaced over [min_ns, max_ns])
         interval_hist = None
@@ -450,9 +481,9 @@ class FluxAnalyzer:
             outlier_rate = 0.5 * (short_rate + long_rate)
             gap_rate = float(np.mean(vals > gap_thr)) if gap_thr > 0 else 0.0
 
-        # Phase variance and cross-rev coherence
+        # Phase variance and cross-rev coherence (use aligned when available)
         if len(per_rev_hists) >= 2:
-            H = np.stack(per_rev_hists, axis=0)  # [R, bins], each row in 0..1
+            H = np.stack(per_rev_hists_al if per_rev_hists_al else per_rev_hists, axis=0)
             # Variance per angular bin across revolutions
             var_bins = np.var(H, axis=0)
             try:
@@ -492,6 +523,9 @@ class FluxAnalyzer:
             'density_estimate_bits_per_rev': dens_est,
             'angular_bins': (bins if bins and bins > 0 else None),
             'angular_hist': angular_hist,
+            'per_angle_variance': per_angle_variance,
+            'per_rev_shifts_bins': per_rev_shifts_bins if per_rev_shifts_bins else None,
+            'instability_theta': instability_theta,
             'interval_hist_bins': (ih_bins if ih_bins > 0 else None),
             'interval_hist_range_ns': ih_range,
             'interval_hist': interval_hist,

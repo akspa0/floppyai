@@ -261,10 +261,13 @@ def analyze_corpus(args):
 
     # Resolve effective RPM from profile or explicit value
     rpm_profile_map = {
-        '35HD': 300.0,   # 3.5" 1.44MB
-        '35DD': 300.0,   # 3.5" 720KB
-        '525HD': 360.0,  # 5.25" 1.2MB
-        '525DD': 300.0,  # 5.25" 360KB
+        '35HD': 300.0,      # 3.5" 1.44MB (MFM)
+        '35DD': 300.0,      # 3.5" 720KB (MFM)
+        '35HDGCR': 300.0,   # 3.5" 800K (Apple GCR variable data rate)
+        '35DDGCR': 300.0,   # 3.5" 400K (Apple GCR variable data rate)
+        '525HD': 360.0,     # 5.25" 1.2MB (MFM)
+        '525DD': 300.0,     # 5.25" 360KB (MFM)
+        '525DDGCR': 300.0,  # 5.25" Apple II 140/280KB (GCR)
     }
     try:
         profile = getattr(args, 'profile', None)
@@ -304,6 +307,7 @@ def analyze_corpus(args):
                     overlay_sectors_hint=getattr(args, 'overlay_sectors_hint', None),
                     export_format='png',
                     align_to_sectors=getattr(args, 'align_to_sectors', 'off'),
+                    label_sectors=getattr(args, 'label_sectors', False),
                 )
                 analyze_disk(disk_args)
                 # Verify that surface_map.json was produced; if missing, track it
@@ -1286,7 +1290,7 @@ def main():
     gen_disk.add_argument("--pattern", default="random", help="Pattern: random|prbs7|prbs15|alt|runlen|chirp|dc_bias|burst")
     gen_disk.add_argument("--seed", type=int, help="Optional seed")
     gen_disk.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions per file (default: 1)")
-    gen_disk.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive/media profile for safe track limits")
+    gen_disk.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Drive/media profile for safe track limits (GCR variants auto-select GCR heuristics)")
     gen_disk.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
     gen_disk.add_argument("--sides", help="Comma list of sides, e.g., '0,1' (default: 0,1)")
     gen_disk.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
@@ -1327,7 +1331,7 @@ def main():
     analyze_disk_parser.add_argument("--track", type=int, help="Manual track number if not parsable from filename")
     analyze_disk_parser.add_argument("--side", type=int, choices=[0, 1], help="Manual side number if not parsable from filename")
     analyze_disk_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization/validation")
-    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile")
+    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Drive/media profile (GCR variants auto-select GCR overlays)")
     analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")
     analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name")
     analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary")
@@ -1339,7 +1343,7 @@ def main():
     analyze_disk_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint (0 = auto)")
     analyze_disk_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha")
     analyze_disk_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color")
-    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode")
+    analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="auto", dest="overlay_mode", help="Overlay heuristic mode (auto = pick from profile)")
     analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
     analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint")
     analyze_disk_parser.add_argument("--export-format", choices=["png","svg","both"], default="png", dest="export_format", help="Output format for figures (default: png)")
@@ -1349,6 +1353,7 @@ def main():
     analyze_disk_parser.add_argument("--radial-upsample", type=int, dest="radial_upsample", help="Override radial upsample factor")
     analyze_disk_parser.add_argument("--render-dpi", type=int, dest="render_dpi", help="Override figure save DPI")
     analyze_disk_parser.add_argument("--align-to-sectors", choices=["off","side","track","auto"], default="off", dest="align_to_sectors", help="Rotate polar plots so sector 0° aligns to detected boundary (default: off; auto = side)")
+    analyze_disk_parser.add_argument("--label-sectors", action="store_true", dest="label_sectors", help="Annotate sector numbers on polar plots when wedge count is known")
     analyze_disk_parser.set_defaults(func=(analyze_disk_cmd if analyze_disk_cmd else lambda _args: (print("analyze_disk not available"), 1)[1]))
 
     # Analyze Corpus
@@ -1357,7 +1362,7 @@ def main():
     corpus_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Generate missing surface maps before aggregating")
     corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps")
-    corpus_parser.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive profile (sets RPM if --rpm not specified)")
+    corpus_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Drive profile (sets RPM if --rpm not specified; GCR variants auto-select GCR overlays)")
     corpus_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type for generated runs")
     corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
     corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")
@@ -1367,7 +1372,7 @@ def main():
     corpus_parser.add_argument("--angular-bins", type=int, default=0, dest="angular_bins", help="Angular bins or sector count hint for overlays")
     corpus_parser.add_argument("--overlay-alpha", type=float, default=0.8, dest="overlay_alpha", help="Overlay line alpha")
     corpus_parser.add_argument("--overlay-color", default="#ff3333", dest="overlay_color", help="Overlay line color")
-    corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode")
+    corpus_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="auto", dest="overlay_mode", help="Overlay heuristic mode (auto = pick from profile)")
     corpus_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
     corpus_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint to use when detection is inconclusive")
     corpus_parser.set_defaults(func=analyze_corpus)

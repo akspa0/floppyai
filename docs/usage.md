@@ -27,8 +27,9 @@ python -m FloppyAI.src.main --help
 ## Global Tips
 
 - Use `--output-dir` to direct outputs to a stable folder; otherwise a timestamped directory under `test_outputs/` is created.
-- For PC disks, `--media-type 35HD` (3.5" HD) or `--media-type 525HD` (5.25" HD) is a good starting point.
-- For classic Mac disks (400K/800K, Apple GCR), use `--media-type 35DD` and `--overlay-mode gcr`.
+- Prefer `--profile` to set RPM and overlay defaults. Supported: `35HD`, `35DD`, `525HD`, `525DD`, plus GCR variants `35HDGCR`, `35DDGCR`, `525DDGCR`.
+- Overlay mode now defaults to `auto` and is profile‑driven (GCR profiles pick GCR; others pick MFM). You can still force with `--overlay-mode`.
+- Instability visuals are now bright by default (inverted magma colormap with auto‑contrast).
 
 ---
 
@@ -90,18 +91,16 @@ python FloppyAI/src/main.py decode <input.raw> \
 
 ```bash
 python FloppyAI/src/main.py analyze_disk <dir_or_file> \
-  [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--media-type 35HD|35DD|525HD|525DD] \
+  [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] \
   [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] \
-  [--gcr-candidates CSV] [--overlay-sectors-hint INT] \
-  [--overlay-alpha F] [--overlay-color HEX] \
+  [--overlay-sectors-hint INT] [--overlay-alpha F] [--overlay-color HEX] \
   [--summarize] [--lm-host HOST[:PORT]] [--lm-model NAME] [--lm-temperature F] \
   [--output-dir DIR]
 ```
 
-- Media override: `--media-type` forces classification, influencing RPM and hints
-- RPM: provide `--rpm`, or let `--profile` set one (35HD/35DD=300, 525HD=360, 525DD=300)
-- MFM overlays (PC): `--format-overlay --overlay-mode mfm --angular-bins 720`
-- GCR overlays (Mac): `--format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" --angular-bins 900`
+- RPM: provide `--rpm`, or let `--profile` set one and bias overlay mode automatically
+- MFM overlays (PC): `--format-overlay` (auto from profile); optional `--align-to-sectors auto` and `--label-sectors`
+- GCR overlays (Mac): `--format-overlay --profile 35DDGCR` (auto candidates `12,11,10,9,8`)
 
 Outputs include `surface_map.json`, `overlay_debug.json`, composite and surface PNGs, and an instability summary CSV.
 
@@ -109,8 +108,8 @@ Outputs include `surface_map.json`, `overlay_debug.json`, composite and surface 
 
 ```bash
 python FloppyAI/src/main.py analyze_corpus <root_or_map.json> \
-  [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--media-type 35HD|35DD|525HD|525DD] \
-  [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] [--gcr-candidates CSV] [--overlay-sectors-hint INT] \
+  [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] \
+  [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] [--overlay-sectors-hint INT] \
   [--overlay-alpha F] [--overlay-color HEX] \
   [--summarize] [--lm-host HOST[:PORT]] [--lm-model NAME] [--lm-temperature F] \
   [--output-dir DIR]

@@ -23,13 +23,13 @@ FloppyAI visualizes KryoFlux STREAM flux data to study the magnetic surface of f
 2) Analyze on Windows (or any machine with Python)
 ```bash
 python FloppyAI/src/main.py analyze_disk .\captures\<your_run_folder> \
-  --profile 35HD --angular-bins 720 \
+  --profile 35HD \
   --output-dir .\test_outputs\<name>
 ```
 
 3) Open the outputs
 - `<name>_disk_surface.png` — Side 0 | Side 1 polar density per track
-- `<name>_instability_map.png` — Both sides instability
+- `<name>_instability_map.png` — Both sides instability (bright hotspots; auto-contrast)
 - `<name>_side0_report.png`, `<name>_side1_report.png` — Per‑side composite:
   - Top: density polar (optional sector overlays)
   - Middle‑left: instability polar
@@ -39,7 +39,7 @@ python FloppyAI/src/main.py analyze_disk .\captures\<your_run_folder> \
 
 Notes:
 - Default export is PNG; SVG for large reports will be added where appropriate.
-- For PC 3.5" HD, `--profile 35HD` sets 300 RPM; for 5.25" HD use `--profile 525HD` (360 RPM).
+- Profiles set RPM and bias overlay heuristics. Supported: `35HD`, `35DD`, `525HD`, `525DD`, plus GCR variants `35HDGCR`, `35DDGCR`, `525DDGCR`.
 
 ## How to Run
 
@@ -60,18 +60,17 @@ python -m FloppyAI.src.main --help
 
 ## Common Tasks
 
-- Analyze a full disk (PC 3.5" HD with MFM overlays)
+- Analyze a full disk (PC 3.5" DD/HD with MFM overlays; overlay mode is auto from profile)
   ```bash
   python FloppyAI/src/main.py analyze_disk .\stream_dumps\example_disk \
-    --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
+    --profile 35DD --format-overlay --align-to-sectors auto --label-sectors \
     --output-dir .\test_outputs\example_run
   ```
 
-- Analyze a Mac GCR disk (400K/800K) with zoned overlays
+- Analyze a Mac GCR disk (400K/800K) with zoned overlays (auto candidates by profile)
   ```bash
   python FloppyAI/src/main.py analyze_disk .\stream_dumps\mac_example \
-    --media-type 35DD --format-overlay --overlay-mode gcr \
-    --gcr-candidates "12,10,8,9,11,13" --angular-bins 900 \
+    --profile 35DDGCR --format-overlay --align-to-sectors auto --label-sectors \
     --output-dir .\test_outputs\mac_example
   ```
 
@@ -84,26 +83,26 @@ python -m FloppyAI.src.main --help
 - Build a corpus and auto-generate missing per-disk maps
   ```bash
   python FloppyAI/src/main.py analyze_corpus .\stream_dumps \
-    --generate-missing --media-type 35HD \
-    --format-overlay --overlay-mode mfm --angular-bins 720 \
+    --generate-missing --profile 35HD \
+    --format-overlay \
     --output-dir .\test_outputs\corpus
   ```
 
 ### analyze_corpus
 ```
-python FloppyAI/src/main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] \
+python FloppyAI/src/main.py analyze_corpus <root_or_map.json> [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] [--summarize] \
   [--lm-host HOST:PORT] [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
 Outputs are placed under `test_outputs/<timestamp>/disks/<disk-label>/`. If you provide `--output-dir` to analyze_corpus, that directory is used instead of a timestamp.
 
 Notes on RPM/Profile:
 - `--rpm` accepts any float; if provided, it overrides `--profile`.
-- `--profile` maps common drives to RPM: `35HD`/`35DD` → 300, `525HD` → 360, `525DD` → 300.
-- `--generate-missing` will propagate the effective RPM to each `analyze_disk` call for consistent normalization.
+- `--profile` maps common drives and formats to RPM and overlay bias: `35HD`/`35DD` → 300 (MFM), `525HD` → 360 (MFM), `525DD` → 300 (MFM), `35DDGCR`/`35HDGCR`/`525DDGCR` → 300 (GCR).
+- `--generate-missing` will propagate effective RPM and overlay flags to each `analyze_disk` call.
 
 ### analyze_disk
 ```
-python FloppyAI/src/main.py analyze_disk <path-to-dir-or-raw> [--rpm FLOAT] [--profile 35HD|35DD|525HD|525DD] [--summarize] [--lm-host HOST:PORT] \
+python FloppyAI/src/main.py analyze_disk <path-to-dir-or-raw> [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] [--summarize] [--lm-host HOST:PORT] \
   [--lm-model MODEL] [--lm-temperature 0.2] [--output-dir]
 ```
 Saves `surface_map.json`, flux plots, the combined polar disk‑surface (`<label>_surface_disk_surface.png`), per‑side high‑res surfaces (`<label>_surface_side0.png`, `..._side1.png`), Instability Map (`<label>_instability_map.png`), Instability CSV (`<label>_instability_summary.csv`), and a composite image (`<label>_composite_report.png`).
@@ -145,15 +144,15 @@ FloppyAI can draw sector‑arc overlays on the polar surface maps and persist th
 
 - Enable overlays via:
   - `--format-overlay`
-  - `--overlay-mode mfm|gcr|auto` (default `mfm`)
-  - `--angular-bins N` (resolution; default 720)
-  - `--gcr-candidates "12,10,8,9,11,13"` (only used by `gcr`/`auto`)
+  - `--overlay-mode mfm|gcr|auto` (default `auto`, profile‑driven)
+  - `--angular-bins N` (resolution; default auto by quality)
+  - `--gcr-candidates` is optional; for GCR profiles sensible defaults are chosen automatically (e.g., `12,11,10,9,8` for 400K/800K Mac).
 
 What the options mean:
 - `--overlay-mode mfm` uses an FFT+autocorrelation method to estimate the dominant sector count per revolution and phase (typical IBM MFM counts: 8, 9, 15, 18).
 - `--overlay-mode gcr` uses a boundary‑contrast search tailored for Apple GCR media (e.g., classic Macintosh 400K/800K). It tests a set of hypothesized sector counts and picks the one with the strongest gap contrast.
-- `--overlay-mode auto` runs both detectors and chooses the higher‑confidence result.
-- `--gcr-candidates` supplies the list of hypothesized sector counts (k values). For Apple GCR, good starters are `12,10,8,9,11,13`. The detector scores each k and selects the best one.
+- `--overlay-mode auto` defers to profile first and may cross‑check; you can still force a mode explicitly if needed.
+- `--gcr-candidates` is only needed for unusual media; GCR profiles auto‑select good candidates (`12,11,10,9,8` for classic Mac).
 
 Choosing good GCR candidates:
 - If you know the likely format, put the expected k first. For many classic Mac GCR tracks, 10 or 12 are common; include neighbors to be safe (e.g., `12,10,8,9,11,13`).
@@ -175,14 +174,14 @@ Corpus behavior with overlays:
 
 Examples:
 ```
-# MFM (PC) overlay, prefer 18 sectors (3.5" HD)
-python FloppyAI/src/main.py analyze_disk .\streams\pc_disk --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720
+# MFM (PC) overlays (auto-picked by profile)
+python FloppyAI/src/main.py analyze_disk .\streams\pc_disk --profile 35HD --format-overlay --align-to-sectors auto --label-sectors
 
-# GCR (Mac) overlay with candidates for classic 400K/800K
-python FloppyAI/src/main.py analyze_disk .\streams\mac_disk --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" --angular-bins 900
+# GCR (Mac) overlays (auto candidates by profile)
+python FloppyAI/src/main.py analyze_disk .\streams\mac_disk --profile 35DDGCR --format-overlay --align-to-sectors auto --label-sectors
 
-# Corpus from raw streams, generating per‑disk maps with overlays then aggregating
-python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --media-type 35DD --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13"
+# Corpus from raw streams, generating per‑disk maps first
+python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --profile 35DDGCR --format-overlay
 ```
 
 #### Interpreting overlay visuals

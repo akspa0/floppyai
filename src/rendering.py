@@ -60,59 +60,103 @@ def _theta_offset_for_side(sm: dict, args, side: int) -> float:
         pass
     # Heuristic fallback: align strongest angular peak to 0° if periodicity is present
     try:
-        insights = sm.get('global', {}).get('insights', {})
-        fmt = insights.get('formatted', {}) if isinstance(insights, dict) else {}
-        entry = fmt.get('by_side', {}).get(str(side), {}) if isinstance(fmt, dict) else {}
         if mode in ('auto', 'side'):
-            # Aggregate angular histogram across tracks for this side
-            bins = 0
-            for tk in sm:
-                if tk == 'global':
-                    continue
-                v = sm[tk]
-                ent_list = v.get(str(side), []) if isinstance(v, dict) else []
-                if isinstance(ent_list, dict):
-                    ent_list = [ent_list]
-                if not ent_list:
-                    continue
-                ent = ent_list[0]
-                b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
-                if isinstance(b, int) and b > bins:
-                    bins = b
-            if bins and bins > 0:
-                agg = np.zeros(bins, dtype=float)
-                used = 0
-                for tk in sm:
-                    if tk == 'global':
-                        continue
-                    v = sm[tk]
-                    ent_list = v.get(str(side), []) if isinstance(v, dict) else []
-                    if isinstance(ent_list, dict):
-                        ent_list = [ent_list]
-                    if not ent_list:
-                        continue
-                    ent = ent_list[0]
-                    ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
-                    b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
-                    if isinstance(ah, list) and isinstance(b, int) and b == bins:
-                        agg[:b] += np.array(ah[:b], dtype=float)
-                        used += 1
-                if used > 0 and np.max(agg) > 0:
-                    # Check for periodicity strength via FFT peak ratio
-                    H = np.abs(np.fft.rfft(agg))
-                    if H.size > 1:
-                        H[0] = 0.0
-                    median_spec = float(np.median(H[1:])) if H.size > 1 else 1.0
-                    k_best = int(np.argmax(H)) if H.size > 0 else 0
-                    v_best = float(H[k_best]) if H.size > 0 else 0.0
-                    ratio = (v_best / max(1e-9, median_spec)) if median_spec > 0 else 0.0
-                    if ratio >= 1.3:
-                        peak_bin = int(np.argmax(agg))
-                        peak_theta = (peak_bin + 0.5) * (2 * np.pi / float(bins))
-                        return float(-peak_theta)
+            hist, bins = _aggregate_side_hist(sm, side)
+            if hist is not None and isinstance(bins, int) and bins > 0:
+                H = np.abs(np.fft.rfft(hist))
+                if H.size > 1:
+                    H[0] = 0.0
+                median_spec = float(np.median(H[1:])) if H.size > 1 else 1.0
+                k_best = int(np.argmax(H)) if H.size > 0 else 0
+                v_best = float(H[k_best]) if H.size > 0 else 0.0
+                ratio = (v_best / max(1e-9, median_spec)) if median_spec > 0 else 0.0
+                if ratio >= 1.3:
+                    peak_bin = int(np.argmax(hist))
+                    peak_theta = (peak_bin + 0.5) * (2 * np.pi / float(bins))
+                    return float(-peak_theta)
     except Exception:
         pass
     return 0.0
+
+
+def _aggregate_side_hist(sm: dict, side: int):
+    """Aggregate angular_hist across tracks for a side. Returns (hist, bins) or (None, 0)."""
+    try:
+        bins = 0
+        for tk in sm:
+            if tk == 'global':
+                continue
+            lst = sm[tk].get(str(side), []) if isinstance(sm[tk], dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if not lst:
+                continue
+            ent = lst[0]
+            b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(b, int) and b > bins:
+                bins = b
+        if not bins:
+            return None, 0
+        agg = np.zeros(bins, dtype=float)
+        used = 0
+        for tk in sm:
+            if tk == 'global':
+                continue
+            lst = sm[tk].get(str(side), []) if isinstance(sm[tk], dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if not lst:
+                continue
+            ent = lst[0]
+            ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+            b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(ah, list) and isinstance(b, int) and b == bins and b > 0:
+                agg[:b] += np.array(ah[:b], dtype=float)
+                used += 1
+        if used > 0 and np.max(agg) > 0:
+            agg = agg / float(np.max(agg))
+        return (agg if used > 0 else None), bins
+    except Exception:
+        return None, 0
+
+
+def _intra_wedge_peak_angles(hist: np.ndarray, bins: int, wedge_angles: list[float]) -> list[float]:
+    """For each wedge interval between successive wedge_angles, return the angle of the max hist bin.
+    Wedge angles should be sorted in [0, 2pi)."""
+    if hist is None or not isinstance(bins, int) or bins <= 0 or not wedge_angles:
+        return []
+    th_centers = (np.arange(bins) + 0.5) * (2 * np.pi / float(bins))
+    peaks = []
+    k = len(wedge_angles)
+    for i in range(k):
+        a0 = wedge_angles[i]
+        a1 = wedge_angles[(i + 1) % k]
+        if a1 <= a0:
+            a1 += 2 * np.pi
+        # Select centers in [a0, a1)
+        mask = (th_centers >= a0) & (th_centers < a1)
+        # Also consider wrap by adding 2pi to centers < a0
+        centers_ext = np.where(th_centers < a0, th_centers + 2 * np.pi, th_centers)
+        mask = (centers_ext >= a0) & (centers_ext < a1)
+        if not np.any(mask):
+            peaks.append((a0 + a1) * 0.5 % (2 * np.pi))
+            continue
+        idx = np.argmax(hist[mask])
+        sel_angles = centers_ext[mask]
+        th = float(sel_angles[idx])
+        peaks.append(th % (2 * np.pi))
+    return peaks
+
+
+def _draw_intra_wedge_peaks(ax, T: int, peaks_rad: list[float], color: str = '#ffaa00', alpha: float = 0.9):
+    """Draw small tick markers near the outer radius at intra-wedge peak angles."""
+    try:
+        if not peaks_rad:
+            return
+        r = max(1.0, T - 1) * 0.95
+        ax.scatter(peaks_rad, [r] * len(peaks_rad), s=6, c=color, alpha=alpha, marker='|', linewidths=0.8)
+    except Exception:
+        pass
 
 
 def _formatted_badge(sm: dict, side: int) -> str:
@@ -137,6 +181,53 @@ def _formatted_badge(sm: dict, side: int) -> str:
     except Exception:
         pass
     return 'Format: unknown'
+
+
+def _wedge_angles_for_side(sm: dict, args, side: int):
+    """Compute wedge boundary angles (radians) for a side.
+    Priority: overlay boundaries -> formatted sector_count with equal spacing.
+    Returns (angles: list[float], k: int|None)
+    """
+    try:
+        insights = sm.get('global', {}).get('insights', {})
+        # Prefer overlay boundaries if present
+        ov = insights.get('overlay', {}) if isinstance(insights, dict) else {}
+        by_side = ov.get('by_side', {}) if isinstance(ov, dict) else {}
+        bdeg = by_side.get(str(side), {}).get('boundaries_deg', []) if isinstance(by_side, dict) else []
+        if isinstance(bdeg, list) and bdeg:
+            return [np.deg2rad(float(x)) for x in bdeg], len(bdeg)
+        # Fallback to formatted k
+        fmt = insights.get('formatted', {}) if isinstance(insights, dict) else {}
+        entry = fmt.get('by_side', {}).get(str(side), {}) if isinstance(fmt, dict) else {}
+        k = entry.get('sector_count') if isinstance(entry, dict) else None
+        if isinstance(k, int) and k >= 2:
+            step = (2 * np.pi) / float(k)
+            # With axis offset applied separately, 0, step, 2*step ... are fine
+            return [m * step for m in range(k)], k
+    except Exception:
+        pass
+    return [], None
+
+
+def _draw_wedges(ax, T: int, angles_rad: list[float], label: bool, color: str = '#ff3333', alpha: float = 0.6):
+    """Draw radial wedge lines and optional labels on a polar axis."""
+    try:
+        for i, th in enumerate(angles_rad):
+            ax.plot([th, th], [0, T], color=color, alpha=alpha, linewidth=0.9)
+        if label and len(angles_rad) >= 2:
+            # Label at mid-angle between consecutive boundaries
+            k = len(angles_rad)
+            for i in range(k):
+                th0 = angles_rad[i]
+                th1 = angles_rad[(i + 1) % k]
+                # Handle wrap-around
+                if th1 < th0:
+                    th1 += 2 * np.pi
+                th_mid = (th0 + th1) * 0.5
+                th_mid = (th_mid + 2 * np.pi) % (2 * np.pi)
+                ax.text(th_mid, max(0.0, T - 1) * 0.92, f"{i+1}", ha='center', va='center', fontsize=7, color=color, alpha=alpha)
+    except Exception:
+        pass
 
 
 def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
@@ -280,6 +371,15 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
                     m = float(np.max(h))
                     if m > 0:
                         h = h / m
+                    # Per-track alignment: roll histogram so its dominant peak maps to 0° if requested
+                    try:
+                        mode = str(getattr(args, 'align_to_sectors', 'off') or 'off').lower()
+                    except Exception:
+                        mode = 'off'
+                    if mode == 'track':
+                        peak = int(np.argmax(h))
+                        if b > 0:
+                            h = np.roll(h, -peak)
                     template = interp_hist_to_theta(h, b)
             templates[ti] = template
         # Fill any None with ones
@@ -321,12 +421,26 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
             for ri, rv in enumerate(r_up):
                 ti = int(np.clip(int(round(rv)), 0, T - 1))
                 Z[ri, :] = templates[side][ti] * float(dens_norm[side][ti])
-            pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+            pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=0.0, vmax=1.0, shading='auto')
             ax.set_ylim(0, T)
             ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
             ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
             badge = _formatted_badge(sm, side)
             ax.set_title(f"Side {side} – {badge}")
+            # Draw wedge spokes and optional labels
+            try:
+                color = getattr(args, 'overlay_color', '#ff3333')
+                alpha = float(getattr(args, 'overlay_alpha', 0.8))
+                label = bool(getattr(args, 'label_sectors', False))
+                angles, _k = _wedge_angles_for_side(sm, args, side)
+                if angles:
+                    _draw_wedges(ax, T, angles, label, color=color, alpha=alpha)
+                    # Intra-wedge peak ticks from aggregated angular histogram
+                    hist, bins = _aggregate_side_hist(sm, side)
+                    peaks = _intra_wedge_peak_angles(hist, bins, angles)
+                    _draw_intra_wedge_peaks(ax, T, peaks)
+            except Exception:
+                pass
         else:
             ax.set_title(f"Side {side} (no data)")
             ax.set_ylim(0, T)
@@ -604,7 +718,25 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         ov_alpha = float(getattr(args, 'overlay_alpha', 0.8))
         for th in thetas_overlay:
             ax_surf.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.9)
-    fig.colorbar(pcm, ax=ax_surf, orientation='vertical', pad=0.1, label='Angular-Weighted Density (norm)')
+    # If no explicit overlay, attempt wedge lines/labels and intra-wedge ticks
+    try:
+        if not thetas_overlay:
+            color = getattr(args, 'overlay_color', '#ff3333')
+            alpha = float(getattr(args, 'overlay_alpha', 0.8))
+            label = bool(getattr(args, 'label_sectors', False))
+            angles, _k = _wedge_angles_for_side(sm, args, side)
+            if angles:
+                _draw_wedges(ax_surf, T, angles, label, color=color, alpha=alpha)
+                hist, bins = _aggregate_side_hist(sm, side)
+                peaks = _intra_wedge_peak_angles(hist, bins, angles)
+                _draw_intra_wedge_peaks(ax_surf, T, peaks)
+    except Exception:
+        pass
+    cbar_sr = fig.colorbar(pcm, ax=ax_surf, orientation='vertical', pad=0.1)
+    try:
+        cbar_sr.set_label('Angular-Weighted Density (norm)')
+    except Exception:
+        pass
     # Rasterize heavy mesh for SVG friendliness while keeping labels/ticks vector
     try:
         pcm.set_rasterized(True)
@@ -623,8 +755,14 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     for ti in range(T):
         inst_rad[ti] = float(instab_scores.get(side, {}).get(ti, 0.0))
     Zr = np.interp(r_up, np.arange(T), inst_rad)
-    Z2 = np.repeat(Zr[:, None], theta.shape[0], axis=1)
-    pcm2 = ax_inst.pcolormesh(TH, R, Z2, cmap='magma', vmin=0.0, vmax=1.0, shading='auto')
+    th_prof_theta, th_prof = _aggregate_instability_theta(sm, side)
+    if th_prof is not None:
+        prof = np.interp(theta % (2*np.pi), th_prof_theta, th_prof)
+    else:
+        prof = np.ones_like(theta)
+    Z2 = np.outer(Zr, prof)
+    Z2 = _contrast_stretch(Z2, pct=97.0)
+    pcm2 = ax_inst.pcolormesh(TH, R, Z2, cmap='magma_r', vmin=0.0, vmax=1.0, shading='auto')
     ax_inst.set_ylim(0, T)
     ax_inst.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
     ax_inst.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
@@ -749,8 +887,73 @@ def render_single_track_detail(sm: dict, out_prefix: Path) -> None:
     
 
 
-def render_instability_map(instab_scores: dict, T: int, out_prefix: Path) -> None:
-    """Render an instability polar map for both sides using instab_scores.{side}{track}=score."""
+def _aggregate_instability_theta(sm: dict, side: int):
+    """Aggregate angular-resolved instability profiles across tracks for a side.
+    Returns (theta_samples array, profile array in 0..1) or (None, None) if unavailable."""
+    try:
+        bins = 0
+        # Determine maximum angular_bins present
+        for tk in sm:
+            if tk == 'global':
+                continue
+            v = sm[tk]
+            lst = v.get(str(side), []) if isinstance(v, dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if not lst:
+                continue
+            ent = lst[0]
+            b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(b, int) and b > bins:
+                bins = b
+        if not bins:
+            return None, None
+        acc = np.zeros(bins, dtype=float)
+        used = 0
+        for tk in sm:
+            if tk == 'global':
+                continue
+            v = sm[tk]
+            lst = v.get(str(side), []) if isinstance(v, dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if not lst:
+                continue
+            ent = lst[0]
+            prof = ent.get('analysis', {}).get('instability_theta') if isinstance(ent, dict) else None
+            ab = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(prof, list) and isinstance(ab, int) and ab == bins and len(prof) == bins:
+                acc += np.array(prof, dtype=float)
+                used += 1
+        if used == 0:
+            return None, None
+        acc = acc / float(np.max(acc)) if np.max(acc) > 0 else acc
+        theta = np.linspace(0, 2 * np.pi, bins, endpoint=False)
+        return theta, acc
+    except Exception:
+        return None, None
+
+
+def _contrast_stretch(Z: np.ndarray, pct: float = 95.0) -> np.ndarray:
+    """Apply simple percentile-based contrast stretch and clamp to 0..1.
+    Uses the given percentile of positive/finite values as the 1.0 reference.
+    """
+    try:
+        finite = Z[np.isfinite(Z)]
+        vec = finite[finite > 0]
+        if vec.size == 0:
+            vec = finite
+        p = float(np.percentile(vec, pct)) if vec.size else 0.0
+        if p > 0.0:
+            Z = Z / p
+        return np.clip(Z, 0.0, 1.0)
+    except Exception:
+        return np.clip(Z, 0.0, 1.0)
+
+
+def render_instability_map(sm: dict, instab_scores: dict, T: int, out_prefix: Path) -> None:
+    """Render an instability polar map for both sides.
+    Intensity is angular-resolved when available: Z(r,theta) = radial_instab(t) * side_profile(theta)."""
     # Build per-side radial arrays
     radials = {}
     for side in [0, 1]:
@@ -775,8 +978,16 @@ def render_instability_map(instab_scores: dict, T: int, out_prefix: Path) -> Non
     pcm = None
     for ax, side in [(ax0, 0), (ax1, 1)]:
         Zr = np.interp(r_up, np.arange(T), radials[side])
-        Z = np.repeat(Zr[:, None], theta.shape[0], axis=1)
-        pcm = ax.pcolormesh(TH, R, Z, cmap='magma', vmin=vmin, vmax=vmax, shading='auto')
+        # Angular profile for this side (fallback to ones)
+        th_prof_theta, th_prof = _aggregate_instability_theta(sm, side)
+        if th_prof is not None:
+            # Interpolate onto theta grid
+            prof = np.interp(theta % (2*np.pi), th_prof_theta, th_prof)
+        else:
+            prof = np.ones_like(theta)
+        Z = np.outer(Zr, prof)
+        Z = _contrast_stretch(Z, pct=97.0)
+        pcm = ax.pcolormesh(TH, R, Z, cmap='magma_r', vmin=vmin, vmax=vmax, shading='auto')
         ax.set_ylim(0, T)
         ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
         ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
@@ -996,19 +1207,42 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
         ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
         badge = _formatted_badge(sm, side)
         ax.set_title(f"Side {side} – {badge} – Angular-Weighted Density")
+        # Draw wedge spokes/labels if available
+        try:
+            color = getattr(args, 'overlay_color', '#ff3333')
+            alpha = float(getattr(args, 'overlay_alpha', 0.8))
+            label = bool(getattr(args, 'label_sectors', False))
+            angles, _k = _wedge_angles_for_side(sm, args, side)
+            if angles:
+                _draw_wedges(ax, T, angles, label, color=color, alpha=alpha)
+        except Exception:
+            pass
         try:
             pcm.set_rasterized(True)
         except Exception:
             pass
+        # Wedge lines and intra-wedge peak ticks
+        try:
+            color = getattr(args, 'overlay_color', '#ff3333')
+            alpha = float(getattr(args, 'overlay_alpha', 0.8))
+            label = bool(getattr(args, 'label_sectors', False))
+            angles, _k = _wedge_angles_for_side(sm, args, side)
+            if angles:
+                _draw_wedges(ax, T, angles, label, color=color, alpha=alpha)
+                hist, bins = _aggregate_side_hist(sm, side)
+                peaks = _intra_wedge_peak_angles(hist, bins, angles)
+                _draw_intra_wedge_peaks(ax, T, peaks)
+        except Exception:
+            pass
 
-    # Add shared colorbar for row 1
+    # Add shared colorbar for row 1 (normalized 0..1)
     try:
         import matplotlib as _mpl
         cax = fig.add_axes([0.92, 0.76, 0.015, 0.18])
         m = _mpl.cm.ScalarMappable(cmap='viridis')
-        m.set_clim(vmin, vmax)
+        m.set_clim(0.0, 1.0)
         cb = fig.colorbar(m, cax=cax)
-        cb.set_label('Bits per Revolution')
+        cb.set_label('Angular-Weighted Density (norm)')
     except Exception:
         pass
 
@@ -1023,8 +1257,14 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
             pass
         inst_rad = np.array([float(instab_scores.get(side, {}).get(ti, 0.0)) for ti in range(T)])
         Zr = np.interp(r_up, np.arange(T), inst_rad)
-        Z = np.repeat(Zr[:, None], theta.shape[0], axis=1)
-        pcm2 = ax.pcolormesh(TH, R, Z, cmap='magma', vmin=0.0, vmax=1.0, shading='auto')
+        th_prof_theta, th_prof = _aggregate_instability_theta(sm, side)
+        if th_prof is not None:
+            prof = np.interp(theta % (2*np.pi), th_prof_theta, th_prof)
+        else:
+            prof = np.ones_like(theta)
+        Z = np.outer(Zr, prof)
+        Z = _contrast_stretch(Z, pct=97.0)
+        pcm2 = ax.pcolormesh(TH, R, Z, cmap='magma_r', vmin=0.0, vmax=1.0, shading='auto')
         ax.set_ylim(0, T)
         ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
         ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
