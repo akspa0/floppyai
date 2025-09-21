@@ -104,6 +104,18 @@ python FloppyAI/src/main.py analyze_disk <dir_or_file> \
 
 Outputs include `surface_map.json`, `overlay_debug.json`, composite and surface PNGs, and an instability summary CSV.
 
+#### Reading the Instability Panels
+
+- Bright = angles where the flux transition pattern varies more across revolutions (less repeatable).
+- Dark = angles with consistent behavior (more repeatable).
+- This is a statistical repeatability map; it is not a decoded data or audio‑waveform view. Format structures (sectors/gaps) and mechanical effects can create wedge‑like patterns without implying synthetic content.
+
+Verification steps:
+- Open `surface_map.json`:
+  - Per track/side: `analysis.instability_theta` (0..1 angular profile), `analysis.instability_features`, and `analysis.instability_score` (scalar).
+  - Check that bright regions in the panel correspond to higher values in `instability_theta` for the same track/angles.
+- See the concept page for details: [docs/instability.md](./instability.md)
+
 ### 8) analyze_corpus — aggregate many maps
 
 ```bash

@@ -107,6 +107,17 @@ Quick-reference for the most common workflows and flags. Run everything from the
     --angular-bins 900 --output-dir .\test_outputs\corpus_mac
   ```
 
+## Instability quick reference
+
+- Bright = angles with less repeatable transition patterns across revolutions (higher variance/incoherence)
+- Dark = angles with more repeatable behavior across spins
+- Not a waveform or decoded data: it’s a statistical repeatability map
+- Wedge structure can reflect sector/gap regions and small mechanical effects
+- Verify with `surface_map.json` per track/side:
+  - `analysis.instability_theta` (0..1 angular profile)
+  - `analysis.instability_features` and `analysis.instability_score`
+- Overlays are guide spokes/labels only (non‑synthetic). See `docs/instability.md` for details
+
 ## Outputs at a glance
 
 - Per‑run (in your `--output-dir` or `test_outputs/<timestamp>/`):

@@ -134,6 +134,14 @@ Instability and Structure:
 - For each track/side we compute `instability_score` (0‑1) and a simple `structure_score` (0‑1). These are saved into `surface_map.json` and summarized in `<label>_instability_summary.csv`.
 - The composite prefers the Instability Map panel; if unavailable, it falls back to the revolution heatmap.
 
+### Instability: definition and interpretation
+
+- Instability measures repeatability of transition patterns across revolutions at each angle. Brighter regions in the panels indicate angles that vary more between spins.
+- It is not an audio‑like waveform or a decoded data visualization; it’s a statistical repeatability map derived from flux transitions.
+- Format structures (sectors/gaps) and small mechanical effects can create wedge‑like angular patterns; that does not imply synthetic content.
+- Verify with `surface_map.json` per track/side: `analysis.instability_theta`, `analysis.instability_features`, `analysis.instability_score`.
+- Learn more: see [docs/instability.md](docs/instability.md).
+
 Single‑sided detection:
 - We detect likely single‑sided disks either by very low Side‑1 coverage or by near‑duplicate Side‑1 vs Side‑0 density radials.
 - When detected, the composite title includes “Single‑sided (S1 missing|duplicated)”, and `surface_map.json` records the reason and coverage metrics under `global.insights`.
@@ -141,6 +149,8 @@ Single‑sided detection:
 ### Format‑Aware Overlays (MFM & GCR)
 
 FloppyAI can draw sector‑arc overlays on the polar surface maps and persist the detected boundaries to JSON.
+
+Note: overlays are non‑synthetic guides (spokes/labels only). They do not add fill or alter the underlying data.
 
 - Enable overlays via:
   - `--format-overlay`
