@@ -14,9 +14,16 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     def side_entries(track_obj, side_int):
         if not isinstance(track_obj, dict):
             return []
+        # Prefer int key then string key
+        val = None
         if side_int in track_obj:
-            return track_obj.get(side_int, [])
-        return track_obj.get(str(side_int), [])
+            val = track_obj.get(side_int, [])
+        else:
+            val = track_obj.get(str(side_int), [])
+        # Normalize to list of entries
+        if isinstance(val, dict):
+            return [val]
+        return val if isinstance(val, list) else []
 
     try:
         max_track = max([int(k) for k in sm.keys() if k != 'global'], default=83)
@@ -66,9 +73,10 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
         vmin, vmax = 0.0, 1.0
 
     # Upsample radial resolution for smoother rendering
+    # Use [0, T] so a single track (T=1) still has non-zero radial extent
     up_factor = 4
     Tu = max(T * up_factor, T)
-    r_up = np.linspace(0, T - 1, Tu)
+    r_up = np.linspace(0, T, Tu)
 
     def upsample(radial, has):
         if has.sum() >= 2:
@@ -93,7 +101,7 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
 
     pcm = None
     for ax, side in [(ax0, 0), (ax1, 1)]:
-        if masks[side].any():
+        if counts[side] > 0 and masks[side].any():
             Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
             pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
             ax.set_ylim(0, T)
@@ -114,95 +122,69 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     plt.savefig(str(outfile), dpi=220)
     plt.close()
 
-    # Individual high-res side images
-    for side in [0, 1]:
-        fig = plt.figure(figsize=(7, 6))
-        gs = GridSpec(1, 2, width_ratios=[1, 0.05], figure=fig)
-        ax = fig.add_subplot(gs[0, 0], projection='polar')
-        cax = fig.add_subplot(gs[0, 1])
-        if masks[side].any():
-            Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
-            pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
-            ax.set_ylim(0, T)
-            ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
-            ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-            ax.set_title(f"Side {side}")
-            cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
-            cbar.set_label('Bits per Revolution')
-        else:
-            ax.set_title(f"Side {side} (no data)")
-            ax.set_ylim(0, T)
-            ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
-        plt.tight_layout()
-        out_single = Path(str(out_prefix) + f"_side{side}.png")
-        plt.savefig(str(out_single), dpi=240)
-        plt.close()
 
-    # Overlays
+def render_single_track_detail(sm: dict, out_prefix: Path) -> None:
+    """Render a single-track polar histogram using angular_hist (if present).
+    Falls back to a neutral notice if histogram is unavailable.
+    Saves to <out_prefix>_single_track_detail.png.
+    """
+    # Find the only track present
+    track_keys = [k for k in sm.keys() if k != 'global']
+    if len(track_keys) != 1:
+        return
+    tk = track_keys[0]
+    side0 = sm[tk].get('0') if isinstance(sm[tk], dict) else None
+    side1 = sm[tk].get('1') if isinstance(sm[tk], dict) else None
+
+    # Prefer side0 then side1
+    entry = None
+    side = 0
+    if isinstance(side0, dict):
+        entry = side0
+        side = 0
+    elif isinstance(side1, dict):
+        entry = side1
+        side = 1
+    elif isinstance(side0, list) and side0:
+        entry = side0[0]
+        side = 0
+    elif isinstance(side1, list) and side1:
+        entry = side1[0]
+        side = 1
+
+    fig = plt.figure(figsize=(7, 6))
+    ax = fig.add_subplot(1, 1, 1, projection='polar')
+    title = f"Track {tk}, Side {side}"
     try:
-        ov_enabled = bool(getattr(args, 'format_overlay', False))
-        ov_alpha = float(getattr(args, 'overlay_alpha', 0.8))
-        ov_color = getattr(args, 'overlay_color', '#ff3333')
-        overlay_info = sm.get('global', {}).get('insights', {}).get('overlay', {}) if isinstance(sm.get('global'), dict) else {}
-        bside = overlay_info.get('by_side', {}) if isinstance(overlay_info, dict) else {}
-        thetas_by_side = {}
-        for s in [0, 1]:
-            bdeg = bside.get(str(s), {}).get('boundaries_deg', [])
-            if not bdeg:
-                continue
-            thetas_by_side[s] = [np.deg2rad(x) for x in bdeg]
-        if ov_enabled and thetas_by_side:
-            # Combined overlay
-            fig = plt.figure(figsize=(13, 5.5))
-            gs = GridSpec(1, 3, width_ratios=[1, 1, 0.05], figure=fig)
-            ax0 = fig.add_subplot(gs[0, 0], projection='polar')
-            ax1 = fig.add_subplot(gs[0, 1], projection='polar')
-            cax = fig.add_subplot(gs[0, 2])
-            pcm = None
-            for ax, side in [(ax0, 0), (ax1, 1)]:
-                if masks[side].any():
-                    Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
-                    pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
-                    ax.set_ylim(0, T)
-                    ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
-                    ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-                    if side in thetas_by_side:
-                        for th in thetas_by_side[side]:
-                            ax.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.9)
-            if pcm is not None:
-                cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
-                cbar.set_label('Bits per Revolution')
-            plt.tight_layout()
-            out_overlay = Path(str(out_prefix) + "_disk_surface_overlay.png")
-            plt.savefig(str(out_overlay), dpi=220)
-            plt.close()
-
-            # Per-side overlays
-            for side in [0, 1]:
-                fig = plt.figure(figsize=(7, 6))
-                gs = GridSpec(1, 2, width_ratios=[1, 0.05], figure=fig)
-                ax = fig.add_subplot(gs[0, 0], projection='polar')
-                cax = fig.add_subplot(gs[0, 1])
-                if masks[side].any():
-                    Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
-                    pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
-                    ax.set_ylim(0, T)
-                    ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
-                    ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-                    if side in thetas_by_side:
-                        for th in thetas_by_side[side]:
-                            ax.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.9)
-                    cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
-                    cbar.set_label('Bits per Revolution')
-                else:
-                    ax.set_ylim(0, T)
-                    ax.text(0.5, 0.5, 'No data', transform=ax.transAxes, ha='center', va='center')
-                plt.tight_layout()
-                out_single_overlay = Path(str(out_prefix) + f"_side{side}_overlay.png")
-                plt.savefig(str(out_single_overlay), dpi=240)
-                plt.close()
+        ah = entry.get('analysis', {}).get('angular_hist') if isinstance(entry, dict) else None
+        bins = entry.get('analysis', {}).get('angular_bins') if isinstance(entry, dict) else None
+        if ah and bins:
+            ah = np.array(ah, dtype=float)
+            theta = np.linspace(0, 2 * np.pi, int(bins), endpoint=False)
+            r = np.ones_like(theta)
+            # Build a simple colored ring with intensity modulated by angular histogram
+            TH, R = np.meshgrid(np.linspace(0, 2 * np.pi, 1440), np.linspace(0.0, 1.0, 80))
+            # Interp hist onto fine theta grid
+            ah_fine = np.interp((TH[0] % (2*np.pi)), theta, ah)
+            Z = np.repeat(ah_fine[np.newaxis, :], R.shape[0], axis=0)
+            pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=0.0, vmax=1.0, shading='auto')
+            ax.set_yticks([0.0, 0.5, 1.0])
+            ax.set_yticklabels(["0","","1.0"])
+            ax.set_title(title + " – angular activity")
+            cbar = fig.colorbar(pcm, ax=ax, orientation='vertical', pad=0.1)
+            cbar.set_label('Normalized Angular Density')
+        else:
+            ax.set_title(title + " – no angular histogram available")
+            ax.text(0.5, 0.5, 'No angular histogram', transform=ax.transAxes, ha='center', va='center')
     except Exception as e:
-        print(f"Overlay rendering skipped due to error: {e}")
+        ax.set_title(title + " – error rendering")
+        ax.text(0.5, 0.5, str(e), transform=ax.transAxes, ha='center', va='center')
+    plt.tight_layout()
+    outfile = Path(str(out_prefix) + "_single_track_detail.png")
+    plt.savefig(str(outfile), dpi=220)
+    plt.close()
+
+    
 
 
 def render_instability_map(instab_scores: dict, T: int, out_prefix: Path) -> None:
@@ -238,7 +220,6 @@ def render_instability_map(instab_scores: dict, T: int, out_prefix: Path) -> Non
         ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
         ax.set_title(f"Side {side}")
     if pcm is not None:
-        from matplotlib import pyplot as plt
         cbar = plt.colorbar(pcm, cax=cax, orientation='vertical')
         cbar.set_label('Instability Score (0-1)')
     plt.tight_layout()

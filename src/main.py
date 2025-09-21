@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import datetime
 import os
 import sys
@@ -37,6 +37,8 @@ from cmd_stream_ops import (
     generate_dummy as generate_dummy_cmd,
     encode_data as encode_data_cmd,
 )
+from patterns import generate_pattern
+from stream_export import write_internal_raw, write_kryoflux_stream
 try:
     from cmd_experiments import run_experiment_matrix as run_experiment_matrix_cmd
 except ImportError:
@@ -145,6 +147,107 @@ def analyze_stream(args):
     except Exception as e:
         print(f"Error analyzing {args.input}: {e}")
         return 1
+    return 0
+
+def _profile_safe_max(profile: str | None) -> int:
+    if not profile:
+        return 80
+    if profile.startswith('35'):
+        return 80
+    if profile.startswith('525'):
+        return 81
+    return 80
+
+def _parse_tracks(tracks_arg: str | None, default_max: int) -> list[int]:
+    if not tracks_arg:
+        return list(range(0, default_max + 1))
+    s = str(tracks_arg).strip()
+    if '-' in s and ',' not in s:
+        a, b = s.split('-', 1)
+        start = int(a)
+        end = int(b)
+        if start > end:
+            start, end = end, start
+        return list(range(start, end + 1))
+    # comma list
+    parts = [p.strip() for p in s.split(',') if p.strip()]
+    return sorted({int(p) for p in parts})
+
+def _parse_sides(sides_arg: str | None) -> list[int]:
+    if not sides_arg:
+        return [0, 1]
+    parts = [p.strip() for p in str(sides_arg).split(',') if p.strip()]
+    sides = [int(p) for p in parts]
+    return sorted({s for s in sides if s in (0, 1)})
+
+def generate_disk(args):
+    """Generate a full-disk set of .raw streams (NN.S.raw) for DTC write flows."""
+    run_dir = get_output_dir(args.output_dir)
+    disk_dir = run_dir / 'disk_image'
+    disk_dir.mkdir(parents=True, exist_ok=True)
+
+    profile = getattr(args, 'profile', None)
+    safe_max = _profile_safe_max(profile)
+    tracks = _parse_tracks(getattr(args, 'tracks', None), safe_max)
+    sides = _parse_sides(getattr(args, 'sides', None))
+
+    # Enforce safe limits unless --allow-extended
+    max_req = max(tracks) if tracks else 0
+    if not getattr(args, 'allow_extended', False) and max_req > safe_max:
+        print(f"Requested max track {max_req} exceeds safe limit {safe_max} for profile {profile or 'default'}.")
+        print("Pass --allow-extended to override (not recommended).")
+        return 2
+
+    density = getattr(args, 'density', 1.0) or 1.0
+    base_cell_ns = float(args.cell_length) / float(density)
+    rpm = float(getattr(args, 'rpm', 360.0) or 360.0)
+    pattern = getattr(args, 'pattern', 'random')
+    seed = getattr(args, 'seed', None)
+    out_fmt = getattr(args, 'output_format', 'kryoflux')
+    revs = int(getattr(args, 'revolutions', 1) or 1)
+
+    files = []
+    for t in tracks:
+        for s in sides:
+            # vary seed per file for uniqueness if seed provided
+            kwargs = {}
+            use_seed = None if seed is None else int(seed) + (t * 2 + s)
+            if use_seed is not None:
+                kwargs['seed'] = use_seed
+            intervals = generate_pattern(
+                name=pattern,
+                revolutions=revs,
+                base_cell_ns=base_cell_ns,
+                rpm=rpm,
+                **kwargs,
+            )
+            fname = f"{t:02d}.{s}.raw"
+            out_path = str(disk_dir / fname)
+            if out_fmt == 'internal':
+                write_internal_raw(intervals, t, s, out_path, num_revs=revs)
+            else:
+                write_kryoflux_stream(intervals, t, s, out_path, num_revs=revs, rpm=rpm)
+            files.append({'track': t, 'side': s, 'file': out_path})
+
+    manifest = {
+        'profile': profile,
+        'safe_max': safe_max,
+        'requested_max': max_req,
+        'pattern': pattern,
+        'density': density,
+        'rpm': rpm,
+        'cell_length': args.cell_length,
+        'revolutions': revs,
+        'output_format': out_fmt,
+        'tracks': tracks,
+        'sides': sides,
+        'files': files,
+        'disk_dir': str(disk_dir),
+    }
+    dump_json(disk_dir / 'disk_image_manifest.json', manifest)
+    print(f"Generated full-disk set to {disk_dir} with {len(files)} files.")
+    print("On Linux DTC host, write with:")
+    print("  FloppyAI/scripts/linux/dtc_write_read_set.sh --image-dir /path/to/disk_image --drive 0 --revs 3")
     return 0
 
 def analyze_corpus(args):
@@ -874,21 +977,48 @@ def write_track(args):
     return 0 if success else 1
 
 def generate_dummy(args):
-    """Generate a dummy stream for testing custom flux."""
+    """Generate a pattern-based flux stream and write to .raw.
+
+    Uses patterns.generate_pattern() to build intervals, then writes either a
+    KryoFlux-like stream (default) or a simple internal raw for analysis/testing.
+    """
     run_dir = get_output_dir(args.output_dir)
-    output_raw = str(run_dir / f"generated_track_{args.track}_{args.side}.raw")
-    wrapper = DTCWrapper(simulation_mode=True)  # Always simulate for generate
-    wrapper.generate_dummy_stream(
-        track=args.track,
-        side=args.side,
-        output_raw_path=output_raw,
+
+    # Resolve base cell with density scaling and RPM for normalization
+    density = getattr(args, 'density', 1.0) or 1.0
+    base_cell_ns = float(args.cell_length) / float(density)
+    rpm = float(getattr(args, 'rpm', 360.0) or 360.0)
+
+    pattern = getattr(args, 'pattern', 'random')
+    seed = getattr(args, 'seed', None)
+    out_fmt = getattr(args, 'output_format', 'kryoflux')
+
+    # Build flux intervals for the requested pattern
+    flux_intervals = generate_pattern(
+        name=pattern,
         revolutions=args.revolutions,
-        cell_length_ns=args.cell_length
+        base_cell_ns=base_cell_ns,
+        rpm=rpm,
+        seed=seed,
     )
-    print(f"Generated saved to {output_raw}")
-    # Analyze the dummy
-    if args.analyze:
-        analyze_stream(argparse.Namespace(input=output_raw, output_dir=run_dir))
+
+    # Choose output path and writer
+    safe_pat = str(pattern).replace('/', '_')
+    output_raw = str(run_dir / f"generated_{safe_pat}_t{args.track}_s{args.side}.raw")
+
+    if out_fmt == 'internal':
+        write_internal_raw(flux_intervals, args.track, args.side, output_raw, num_revs=args.revolutions)
+    else:
+        write_kryoflux_stream(flux_intervals, args.track, args.side, output_raw, num_revs=args.revolutions, rpm=rpm)
+
+    print(f"Generated pattern '{pattern}' saved to {output_raw}")
+    print(f"Intervals: {len(flux_intervals)} | Revs: {args.revolutions} | Base cell: {base_cell_ns:.1f} ns | RPM: {rpm}")
+    # Optionally analyze (best with kryoflux-format output)
+    if getattr(args, 'analyze', False):
+        try:
+            analyze_stream(argparse.Namespace(input=output_raw, output_dir=run_dir))
+        except Exception as e:
+            print(f"Analysis failed (likely due to non-KryoFlux format): {e}")
     return 0
 
 def encode_data(args):
@@ -1137,9 +1267,30 @@ def main():
     gen_parser.add_argument("side", type=int, choices=[0, 1], help="Side (for naming)")
     gen_parser.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions (default: 1)")
     gen_parser.add_argument("--cell", type=int, default=4000, dest="cell_length", help="Nominal cell length ns (default: 4000)")
-    gen_parser.add_argument("--analyze", action="store_true", help="Analyze after generating")
+    gen_parser.add_argument("--density", type=float, default=1.0, help="Density scaling (>1.0 shortens cells)")
+    gen_parser.add_argument("--rpm", type=float, default=360.0, help="Assumed RPM for normalization (default: 360)")
+    gen_parser.add_argument("--pattern", default="random", help="Pattern name: random|prbs7|prbs15|alt|runlen|chirp|dc_bias|burst")
+    gen_parser.add_argument("--seed", type=int, help="Optional seed for pattern generation")
+    gen_parser.add_argument("--output-format", choices=["kryoflux", "internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    gen_parser.add_argument("--analyze", action="store_true", help="Analyze after generating (best with kryoflux format)")
     gen_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     gen_parser.set_defaults(func=generate_dummy)
+
+    # Generate full disk image set (NN.S.raw)
+    gen_disk = subparsers.add_parser("generate_disk", help="Generate full-disk NN.S.raw set for DTC")
+    gen_disk.add_argument("--cell", type=int, default=4000, dest="cell_length", help="Nominal cell length ns (default: 4000)")
+    gen_disk.add_argument("--density", type=float, default=1.0, help="Density scaling (>1.0 shortens cells)")
+    gen_disk.add_argument("--rpm", type=float, default=360.0, help="Assumed RPM (default: 360)")
+    gen_disk.add_argument("--pattern", default="random", help="Pattern: random|prbs7|prbs15|alt|runlen|chirp|dc_bias|burst")
+    gen_disk.add_argument("--seed", type=int, help="Optional seed")
+    gen_disk.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions per file (default: 1)")
+    gen_disk.add_argument("--profile", choices=["35HD","35DD","525HD","525DD"], help="Drive/media profile for safe track limits")
+    gen_disk.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
+    gen_disk.add_argument("--sides", help="Comma list of sides, e.g., '0,1' (default: 0,1)")
+    gen_disk.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    gen_disk.add_argument("--allow-extended", action="store_true", dest="allow_extended", help="Allow tracks beyond safe limits (not recommended)")
+    gen_disk.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    gen_disk.set_defaults(func=generate_disk)
 
     # Encode
     encode_parser = subparsers.add_parser("encode", help="Encode binary data to custom .raw stream")

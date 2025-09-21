@@ -19,6 +19,7 @@ from overlay_detection import (
 from rendering import (
     render_disk_surface,
     render_instability_map,
+    render_single_track_detail,
 )
 from utils.json_io import dump_json
 
@@ -30,12 +31,26 @@ def run(args):
     generating per-track/side analysis with surface visualizations and metrics.
     """
     run_dir = get_output_dir(args.output_dir)
+    # Prepare run logging (collect and write at end)
+    log_lines = []
+    def log(msg: str):
+        try:
+            print(msg)
+        except Exception:
+            pass
+        try:
+            log_lines.append(str(msg))
+        except Exception:
+            pass
     input_path = Path(args.input)
 
     # Find all .raw files
     raw_files = []
     if input_path.is_dir():
-        raw_files = list(input_path.rglob("*.raw"))
+        # Case-insensitive discovery: include *.raw and *.RAW
+        raw_files = list(input_path.rglob("*.raw")) + list(input_path.rglob("*.RAW"))
+        # Deduplicate and sort
+        raw_files = sorted({p.resolve() for p in raw_files})
         if not raw_files:
             print(f"No .raw files found in {input_path}")
             return 1
@@ -45,9 +60,19 @@ def run(args):
         print(f"Input must be a directory containing .raw files or a single .raw file: {input_path}")
         return 1
 
-    print(f"Found {len(raw_files)} .raw files to analyze")
+    log(f"Found {len(raw_files)} .raw files to analyze")
+    try:
+        preview = [str(p) for p in raw_files[:5]]
+        if len(raw_files) > 5:
+            preview.append("...")
+            preview.extend([str(p) for p in raw_files[-3:]])
+        log("  Files preview:")
+        for line in preview:
+            log(f"    {line}")
+    except Exception:
+        pass
 
-    # Resolve effective RPM
+    # Resolve effective RPM (infer from profile or input path when possible)
     rpm_profile_map = {
         '35HD': 300.0,   # 3.5" 1.44MB
         '35DD': 300.0,   # 3.5" 720KB
@@ -58,9 +83,17 @@ def run(args):
         profile = getattr(args, 'profile', None)
     except Exception:
         profile = None
+    # Heuristic: infer 3.5" HD (300 RPM) from input path if profile not given
+    inferred_rpm = None
+    try:
+        ip_str = str(Path(getattr(args, 'input', '')).as_posix()).lower()
+        if any(k in ip_str for k in ['1.44', '35hd', '3.5']):
+            inferred_rpm = 300.0
+    except Exception:
+        pass
     effective_rpm = (
         float(getattr(args, 'rpm', None)) if getattr(args, 'rpm', None) is not None
-        else rpm_profile_map.get(profile, 360.0)
+        else rpm_profile_map.get(profile, inferred_rpm if inferred_rpm is not None else 360.0)
     )
 
     # Global surface map structure
@@ -71,21 +104,31 @@ def run(args):
             'media_type': getattr(args, 'media_type', None),
             'analysis_timestamp': datetime.datetime.now().isoformat(),
             'insights': {
-                'overlay': {
-                    'format_overlay_enabled': getattr(args, 'format_overlay', False),
-                    'angular_bins': getattr(args, 'angular_bins', 0),
-                    'overlay_mode': getattr(args, 'overlay_mode', 'mfm'),
-                    'gcr_candidates': getattr(args, 'gcr_candidates', '10,12,8,9,11,13'),
-                }
-            }
+                'overlay': {}
+            },
+            # In directory mode, include manifest of inputs for transparency
+            'inputs': [str(p) for p in raw_files] if input_path.is_dir() else [str(input_path)]
         }
     }
+
+    # Populate overlay config with sensible defaults
+    overlay_cfg = surface_map['global']['insights']['overlay']
+    fmt_enabled = getattr(args, 'format_overlay', False)
+    overlay_cfg['format_overlay_enabled'] = fmt_enabled
+    overlay_cfg['angular_bins'] = getattr(args, 'angular_bins', 0)
+    # If profile suggests MFM, default overlay mode to mfm
+    default_overlay_mode = 'mfm' if (profile in ['35HD', '35DD', '525HD', '525DD'] or inferred_rpm == 300.0) else 'mfm'
+    overlay_mode = getattr(args, 'overlay_mode', default_overlay_mode)
+    overlay_cfg['overlay_mode'] = overlay_mode
+    # Only include gcr_candidates for gcr/auto modes to avoid confusion on MFM media
+    if overlay_mode in ['gcr', 'auto']:
+        overlay_cfg['gcr_candidates'] = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
 
     # Process each raw file
     processed_count = 0
     for raw_file in sorted(raw_files):
         try:
-            print(f"Processing {raw_file}...")
+            log(f"Processing {raw_file}...")
 
             # Extract track/side from filename if possible
             track_num = getattr(args, 'track', None)
@@ -94,6 +137,9 @@ def run(args):
             if track_num is None or side_num is None:
                 # Try to parse from filename
                 filename = raw_file.name
+                # Supported patterns:
+                #  - ...t<digits>...s<digit>... (existing)
+                #  - NN.S.raw (e.g., 00.0.raw) from generate_disk
                 track_match = re.search(r't(\d+)', filename, re.IGNORECASE)
                 side_match = re.search(r's(\d)', filename, re.IGNORECASE)
 
@@ -102,6 +148,19 @@ def run(args):
                 if side_match:
                     side_num = int(side_match.group(1))
 
+                if track_num is None or side_num is None:
+                    nn_s_match = re.match(r'^(\d{2})\.(\d)\.raw$', filename, re.IGNORECASE)
+                    if nn_s_match:
+                        track_num = int(nn_s_match.group(1))
+                        side_num = int(nn_s_match.group(2))
+
+                # Fallback: extract trailing NN.S before .raw anywhere in the name
+                if track_num is None or side_num is None:
+                    tail_match = re.search(r'(\d{1,2})\.(\d)\.raw$', filename, re.IGNORECASE)
+                    if tail_match:
+                        track_num = int(tail_match.group(1))
+                        side_num = int(tail_match.group(2))
+
             if track_num is None or side_num is None:
                 print(f"Warning: Could not determine track/side for {raw_file}, skipping")
                 continue
@@ -109,13 +168,30 @@ def run(args):
             # Analyze the stream
             analyzer = FluxAnalyzer()
             parsed = analyzer.parse(str(raw_file))
+            stats = parsed.get('stats', {}) if isinstance(parsed, dict) else {}
+            if stats:
+                log(f"  Parsed ok: total_fluxes={stats.get('total_fluxes')}, num_revolutions={stats.get('num_revolutions')}, mean_interval_ns={stats.get('mean_interval_ns'):.2f}")
+                if 'decoder_sck_hz' in stats:
+                    log(f"  decoder_sck_hz={stats.get('decoder_sck_hz'):.3f} Hz, decoder_oob_index_count={stats.get('decoder_oob_index_count', 0)}, decoder_total_samples={stats.get('decoder_total_samples', 0)}")
 
             if not parsed.get('stats', {}):
-                print(f"Warning: No flux data in {raw_file}, skipping")
+                log(f"Warning: No flux data in {raw_file}, skipping")
                 continue
 
-            # Perform analysis
-            analysis = analyzer.analyze()
+            # Perform analysis (compute angular histogram if bins specified)
+            ang_bins = int(getattr(args, 'angular_bins', 0) or 0)
+            analysis = analyzer.analyze(ang_bins if ang_bins > 0 else None)
+
+            # Emit per-file flux visualizations to prove decoded flux content
+            try:
+                base_file_prefix = str((run_dir / Path(raw_file).stem))
+                analyzer.visualize(base_file_prefix, 'intervals')
+                analyzer.visualize(base_file_prefix, 'histogram')
+                if len(analyzer.revolutions) > 1:
+                    analyzer.visualize(base_file_prefix, 'heatmap')
+                log(f"  Saved flux plots: {Path(base_file_prefix).name}_intervals.png, _hist.png")
+            except Exception as ve:
+                log(f"  Visualization error for {raw_file}: {ve}")
 
             # Create track entry
             track_key = str(track_num)
@@ -131,20 +207,59 @@ def run(args):
                 'stats': parsed.get('stats', {})
             }
 
-            # Add overlay information if enabled
+            # Add overlay information if enabled (populate global.insights.overlay.by_side)
             if getattr(args, 'format_overlay', False):
                 try:
-                    if getattr(args, 'overlay_mode', 'mfm') == 'mfm':
-                        overlay = detect_side_overlay_mfm(
-                            analyzer, angular_bins=getattr(args, 'angular_bins', 0)
-                        )
-                    else:  # gcr mode
-                        overlay = detect_side_overlay_gcr(
-                            analyzer, angular_bins=getattr(args, 'angular_bins', 0)
-                        )
+                    bins = int(getattr(args, 'angular_bins', 720) or 720)
+                    mode = str(getattr(args, 'overlay_mode', 'mfm')).lower()
+                    files = [str(raw_file)]
+                    k = None; bdeg = []; conf = 0.0
+                    hint_k = getattr(args, 'overlay_sectors_hint', None)
+                    if isinstance(hint_k, int) and hint_k and hint_k > 1:
+                        # Use explicit hint: equally spaced boundaries
+                        k = int(hint_k)
+                        step = 360.0 / float(k)
+                        bdeg = [step * i for i in range(k)]
+                        conf = 1.0
+                    elif mode == 'mfm':
+                        k, bdeg, conf = detect_side_overlay_mfm(files, bins)
+                    elif mode == 'gcr':
+                        gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+                        cand = []
+                        for tok in str(gc_raw).replace(' ', '').split(','):
+                            try:
+                                cand.append(int(tok))
+                            except Exception:
+                                continue
+                        k, bdeg, conf = detect_side_overlay_gcr(files, bins, cand)
+                    elif mode == 'auto':
+                        # Try MFM then GCR, keep higher confidence
+                        k1, b1, c1 = detect_side_overlay_mfm(files, bins)
+                        gc_raw = getattr(args, 'gcr_candidates', '10,12,8,9,11,13')
+                        cand = []
+                        for tok in str(gc_raw).replace(' ', '').split(','):
+                            try:
+                                cand.append(int(tok))
+                            except Exception:
+                                continue
+                        k2, b2, c2 = detect_side_overlay_gcr(files, bins, cand)
+                        if (c2 or 0) > (c1 or 0):
+                            k, bdeg, conf = k2, b2, c2
+                        else:
+                            k, bdeg, conf = k1, b1, c1
 
-                    if overlay:
-                        side_data['overlay'] = overlay
+                    if k is not None and bdeg:
+                        overlay_cfg = surface_map['global']['insights']['overlay']
+                        by_side = overlay_cfg.get('by_side', {})
+                        entry = {
+                            'sector_count': int(k),
+                            'boundaries_deg': [float(x) for x in bdeg],
+                            'confidence': float(conf),
+                        }
+                        if isinstance(hint_k, int) and hint_k and hint_k > 1:
+                            entry['hint_used'] = True
+                        by_side[str(side_num)] = entry
+                        overlay_cfg['by_side'] = by_side
                 except Exception as e:
                     print(f"Warning: Overlay detection failed for {raw_file}: {e}")
 
@@ -152,7 +267,7 @@ def run(args):
             processed_count += 1
 
         except Exception as e:
-            print(f"Error processing {raw_file}: {e}")
+            log(f"Error processing {raw_file}: {e}")
             continue
 
     if processed_count == 0:
@@ -161,40 +276,80 @@ def run(args):
 
     # Generate visualizations
     try:
-        print("Generating visualizations...")
+        log("Generating visualizations...")
 
-        # Create composite report
-        base_name = str(run_dir / input_path.name)
-        render_disk_surface(surface_map, base_name, "composite_report")
+        # Output base prefix
+        base_name = str(run_dir / Path(input_path.name).stem)
 
-        # Create polar surface maps
-        render_disk_surface(surface_map, base_name, "surface_disk_surface")
+        # Create polar surface maps (pass args so overlay flags propagate)
+        render_disk_surface(surface_map, base_name, args)
+        # If only one track is present, render a single-track angular detail helper
+        track_keys = [k for k in surface_map.keys() if k != 'global']
+        if len(track_keys) == 1:
+            render_single_track_detail(surface_map, base_name)
 
-        # Create individual side maps
-        for side in [0, 1]:
-            side_name = f"side{side}"
-            render_disk_surface(surface_map, base_name, f"surface_{side_name}")
+        # Build and render instability map
+        # Compute simple instability scores from noise variance normalized per side
+        instab_scores = {0: {}, 1: {}}
+        max_track = 0
+        side_vars = {0: [], 1: []}
+        for tk in surface_map:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk); max_track = max(max_track, ti)
+            except Exception:
+                continue
+            for s in [0, 1]:
+                entry_list = surface_map[tk].get(str(s), []) if isinstance(surface_map[tk], dict) else []
+                # Normalize: if it's a dict, wrap into a list
+                if isinstance(entry_list, dict):
+                    entry_list = [entry_list]
+                for ent in entry_list:
+                    var = None
+                    try:
+                        var = ent.get('analysis', {}).get('noise_profile', {}).get('avg_variance')
+                    except Exception:
+                        var = None
+                    if isinstance(var, (int, float)):
+                        side_vars[s].append(float(var))
+                        instab_scores[s][ti] = float(var)
+        # Normalize per side
+        for s in [0, 1]:
+            vmax = max(side_vars[s]) if side_vars[s] else 1.0
+            if vmax <= 0:
+                vmax = 1.0
+            for ti, v in list(instab_scores[s].items()):
+                instab_scores[s][ti] = float(min(1.0, max(0.0, v / vmax)))
 
-        # Create instability map
-        render_instability_map(surface_map, base_name)
+        render_instability_map(instab_scores, max_track + 1, base_name)
 
-        print(f"Visualizations saved in {run_dir}")
+        log(f"Visualizations saved in {run_dir}")
 
     except Exception as e:
-        print(f"Warning: Visualization generation failed: {e}")
+        log(f"Warning: Visualization generation failed: {e}")
 
     # Save surface map
     surface_map_path = run_dir / 'surface_map.json'
     dump_json(surface_map_path, surface_map)
-    print(f"Surface map saved to {surface_map_path}")
+    log(f"Surface map saved to {surface_map_path}")
 
     # Optional LLM summary
     if getattr(args, 'summarize', False):
         try:
-            print("Generating LLM summary...")
+            log("Generating LLM summary...")
             summarize_disk_analysis(surface_map, run_dir, args)
         except Exception as e:
-            print(f"Warning: LLM summary failed: {e}")
+            log(f"Warning: LLM summary failed: {e}")
+
+    # Write run log
+    try:
+        rl = run_dir / 'run.log'
+        with open(rl, 'w', encoding='utf-8') as f:
+            f.write("\n".join(log_lines) + "\n")
+        print(f"Log saved to {rl}")
+    except Exception:
+        pass
 
     return 0
 
