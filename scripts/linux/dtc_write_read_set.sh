@@ -171,16 +171,18 @@ unset IFS
   echo "dtc_write_read_set.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
   echo "dtc version:"
-  $DTC_BIN --version || true
+  $DTC_BIN -V || true
   echo
   echo "Image dir: $IMAGE_DIR"
   echo "Files to write: ${#SORTED[@]}"
 } >"$LOG_PATH"
 
-# Write all
+pushd "$IMAGE_DIR" >/dev/null
+# Write all (use write-from-stream set type: -wi4, compact flags, base name without extension)
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
-  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 21 -f '${p}' -t ${t} -s ${s} write")
+  base=$(printf "%02d.%d" "$t" "$s")
+  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -wi4 -f${base} -s${t} -e${t} -g${s} -w")
   echo "[WRITE] ${CMD[*]}"
   echo "[WRITE] ${CMD[*]}" >>"$LOG_PATH"
   if [[ $DRY_RUN -eq 1 ]]; then continue; fi
@@ -188,16 +190,18 @@ for entry in "${SORTED[@]}"; do
   eval ${CMD[@]} | tee -a "$LOG_PATH"
   sleep 0.2
 done
+popd >/dev/null
 
 echo "Write phase complete." | tee -a "$LOG_PATH"
 
 # Optional read-back
 if [[ $READ_BACK -eq 1 ]]; then
   mkdir -p "$OUT_DIR"
+  pushd "$OUT_DIR" >/dev/null
   for entry in "${SORTED[@]}"; do
     IFS=':' read -r t s p <<<"$entry"
-    cap="$OUT_DIR/capture_$(printf "%02d" "$t").$s.raw"
-    CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -t ${t} -s ${s} -r ${REVS} -f '${cap}' read")
+    pref="capture_$(printf "%02d" "$t").$s"
+    CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${t} -e${t} -g${s} -r${REVS} -f${pref}")
     echo "[READ ] ${CMD[*]}"
     echo "[READ ] ${CMD[*]}" >>"$LOG_PATH"
     if [[ $DRY_RUN -eq 1 ]]; then continue; fi
@@ -205,6 +209,7 @@ if [[ $READ_BACK -eq 1 ]]; then
     eval ${CMD[@]} | tee -a "$LOG_PATH"
     sleep 0.2
   done
+  popd >/dev/null
   echo "Read-back phase complete. Captures in $OUT_DIR" | tee -a "$LOG_PATH"
 fi
 

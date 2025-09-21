@@ -111,12 +111,15 @@ fi
   echo "dtc_write_read.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
   echo "dtc version:"
-  $DTC_BIN --version || true
+  $DTC_BIN -V || true
   echo
 } >"$LOG_PATH"
 
-WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 21 -f '${WRITE_INPUT}' -t ${TRACK} -s ${SIDE} write")
-READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -t ${TRACK} -s ${SIDE} -r ${REVS} -f '${CAPTURE_PATH}' read")
+WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i21 -f'${WRITE_INPUT}' -t${TRACK} -s${SIDE} -w")
+
+# For read, run within OUT_DIR and use a prefix so DTC creates BASE_NAME%02d.%d.raw
+pushd "$OUT_DIR" >/dev/null
+READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -t${TRACK} -s${SIDE} -r${REVS} -f${BASE_NAME}")
 
 echo "[WRITE] ${WRITE_CMD[*]}"
 echo "[READ ] ${READ_CMD[*]}"
@@ -135,6 +138,7 @@ fi
 eval ${WRITE_CMD[@]} | tee -a "$LOG_PATH"
 # shellcheck disable=SC2068
 eval ${READ_CMD[@]} | tee -a "$LOG_PATH"
+popd >/dev/null
 
-echo "Capture saved to: $CAPTURE_PATH"
+echo "Capture saved to: $OUT_DIR/${BASE_NAME}%02d.%d.raw"
 echo "Log saved to:     $LOG_PATH"

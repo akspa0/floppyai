@@ -82,6 +82,8 @@ mkdir -p "$RUN_DIR"
 LOG_PATH="$RUN_DIR/run.log"
 SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
+pushd "$RUN_DIR" >/dev/null
+
 {
   echo "capture_forensic_repeat_track.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
@@ -94,12 +96,11 @@ echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_PATH"; sleep "$SPINUP"
 
 for ((i=1; i<=REPEATS; i++)); do
   ts=$(date +"%Y%m%d_%H%M%S")
-  # Use standard prefix so dtc writes track%02d.%d.raw under RUN_DIR
-  prefix="$RUN_DIR/track"
-  cmd="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${TRACK} -s ${SIDE} -r ${REVS} -f '${prefix}'"
+  # Run within RUN_DIR; use simple prefix 'track' so files are track%02d.%d.raw
+  cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -ftrack"
   echo "[READ ] $cmd" | tee -a "$LOG_PATH"
   if [[ $DRY_RUN -eq 0 ]]; then
-    eval "$cmd" | tee -a "$LOG_PATH"
+    bash -lc "$cmd" | tee -a "$LOG_PATH"
   fi
   if (( i < REPEATS )); then
     echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"
@@ -108,3 +109,4 @@ for ((i=1; i<=REPEATS; i++)); do
 done
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+popd >/dev/null

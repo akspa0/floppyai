@@ -120,6 +120,8 @@ LOG_PATH="$RUN_DIR/run.log"
 
 SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
+pushd "$RUN_DIR" >/dev/null
+
 {
   echo "capture_forensic_full_disk.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
@@ -132,13 +134,12 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
 run_read() {
   local track=$1 side=$2
-  # Use a stable prefix so DTC writes track%02d.%d.raw under RUN_DIR
-  local prefix="$RUN_DIR/track"
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${track} -s ${side} -r ${REVS} -f '${prefix}'"
+  # Run within RUN_DIR and use simple prefix 'track' so files are track%02d.%d.raw
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
   echo "[READ ] $cmd"
   echo "[READ ] $cmd" >> "$LOG_PATH"
   if [[ $DRY_RUN -eq 0 ]]; then
-    eval "$cmd" | tee -a "$LOG_PATH"
+    bash -lc "$cmd" | tee -a "$LOG_PATH"
   fi
 }
 
@@ -164,3 +165,4 @@ if [[ "$SIDES" == "both" || "$SIDES" == "1" ]]; then
 fi
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+popd >/dev/null

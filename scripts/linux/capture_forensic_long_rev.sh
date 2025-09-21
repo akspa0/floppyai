@@ -92,7 +92,7 @@ echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_PATH"; sleep "$SPINUP"
 TS2=$(date +"%Y%m%d_%H%M%S")
 # Use a standard prefix so dtc writes track%02d.%d.raw under RUN_DIR
 PREFIX="$RUN_DIR/track"
-CMD="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${TRACK} -s ${SIDE} -r ${REVS} -f '${PREFIX}'"
+CMD="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -ftrack"
 echo "[READ ] $CMD" | tee -a "$LOG_PATH"
 if [[ $DRY_RUN -eq 0 ]]; then
   eval "$CMD" | tee -a "$LOG_PATH"
