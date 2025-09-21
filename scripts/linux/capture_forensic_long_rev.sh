@@ -27,7 +27,7 @@ Optional (common):
   --dry-run             Print commands only; do not execute
 
 Optional (capture profile):
-  --revs <N>            Revolutions per capture (default: 32)
+  --revs <N>            Revolutions per capture (default: 3)
   --cooldown <sec>      Pause after capture (default: 5)
   --spinup <sec>        Spin-up delay before capture (default: 2)
 USAGE
@@ -41,7 +41,7 @@ OUT_DIR="./captures"
 LABEL="longrev"
 USE_SUDO=1
 DRY_RUN=0
-REVS=32
+REVS=3
 COOLDOWN=5
 SPINUP=2
 

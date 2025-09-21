@@ -10,14 +10,14 @@ set -euo pipefail
 #
 # Example:
 #   ./capture_forensic_full_disk.sh \
-#     --profile 35HD --sides both --revs 16 \
+#     --profile 35HD --sides both --revs 3 \
 #     --start-track 0 --end-track 79 --step 1 \
 #     --cooldown 3 --spinup 2 \
 #     --out-dir ./captures --label win95_set --drive 0
 #
 # Output:
 #   <out-dir>/<label_or_full-disk>_<timestamp>/
-#     - *.raw STREAM files (e.g., label_t00_s0_r16_YYYYmmdd_HHMMSS.raw)
+#     - *.raw STREAM files (e.g., label_t00_s0_r3_YYYYmmdd_HHMMSS.raw)
 #     - run.log with DTC version and command audit
 
 usage() {
@@ -38,7 +38,7 @@ Optional (capture profile):
   --start-track <N>      Starting track (default from profile or 0)
   --end-track <N>        Ending track inclusive (default from profile or 79/39)
   --step <N>             Track step (default: 1)
-  --revs <N>             Revolutions per track (default: 16)
+  --revs <N>             Revolutions per track (default: 3)
   --cooldown <sec>       Pause between tracks (default: 2)
   --spinup <sec>         Spin-up delay before each side (default: 2)
 
@@ -61,7 +61,7 @@ SIDES="both"
 START_TRACK=""
 END_TRACK=""
 STEP=1
-REVS=16
+REVS=3
 COOLDOWN=2
 SPINUP=2
 
@@ -126,7 +126,7 @@ LOG_FILE="run.log"
   echo "capture_forensic_full_disk.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
   echo "dtc version:"
-  "$DTC_BIN" -V || true
+  "$DTC_BIN" -V 2>&1 || true
   echo
   echo "Profile: ${PROFILE}  Sides: ${SIDES}  Tracks: ${START_TRACK}..${END_TRACK} step ${STEP}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
@@ -147,13 +147,23 @@ capture_side() {
   local side=$1
   echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_FILE"
   sleep "$SPINUP"
-  local t=$START_TRACK
-  while (( t <= END_TRACK )); do
-    run_read "$t" "$side"
-    echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_FILE"
-    sleep "$COOLDOWN"
-    t=$(( t + STEP ))
-  done
+  if (( STEP == 1 )); then
+    # Single dtc invocation across the whole track range for this side
+    local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+    echo "[READ ] $cmd" | tee -a "$LOG_FILE"
+    if [[ $DRY_RUN -eq 0 ]]; then
+      bash -lc "$cmd" | tee -a "$LOG_FILE"
+    fi
+  else
+    # Fallback: per-track loop when a custom STEP is requested
+    local t=$START_TRACK
+    while (( t <= END_TRACK )); do
+      run_read "$t" "$side"
+      echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_FILE"
+      sleep "$COOLDOWN"
+      t=$(( t + STEP ))
+    done
+  fi
 }
 
 # Execute

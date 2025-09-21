@@ -29,7 +29,7 @@ Optional (common):
 
 Optional (capture profile):
   --repeats <N>         Number of passes (default: 10)
-  --revs <N>            Revolutions per capture (default: 16)
+  --revs <N>            Revolutions per capture (default: 3)
   --cooldown <sec>      Pause between passes (default: 5)
   --spinup <sec>        Spin-up delay before first capture (default: 2)
 USAGE
@@ -44,7 +44,7 @@ LABEL="repeat"
 USE_SUDO=1
 DRY_RUN=0
 REPEATS=10
-REVS=16
+REVS=3
 COOLDOWN=5
 SPINUP=2
 

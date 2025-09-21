@@ -31,7 +31,7 @@ Optional (capture profile):
   --end-track <N>        Ending track inclusive (default from profile or 79/39)
   --step <N>             Track step (default: 1)
   --sweeps <N>           Number of sweeps (default: 3). Each sweep goes forward then backward.
-  --revs <N>             Revolutions per capture (default: 16)
+  --revs <N>             Revolutions per capture (default: 3)
   --cooldown <sec>       Pause between captures (default: 3)
   --spinup <sec>         Spin-up delay before each side (default: 2)
 USAGE
@@ -50,7 +50,7 @@ START_TRACK=""
 END_TRACK=""
 STEP=1
 SWEEPS=3
-REVS=16
+REVS=3
 COOLDOWN=3
 SPINUP=2
 
