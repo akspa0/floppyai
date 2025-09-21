@@ -112,7 +112,7 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 {
   echo "capture_forensic_sweep.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"; "$DTC_BIN" --version || true; echo
+  echo "dtc version:"; "$DTC_BIN" -V || true; echo
   echo "Profile: ${PROFILE}  Sides: ${SIDES}  Tracks: ${START_TRACK}..${END_TRACK} step ${STEP}  Sweeps: ${SWEEPS}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
 } > "$LOG_PATH"
@@ -120,9 +120,8 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 run_read() {
   local track=$1 side=$2
   local ts=$(date +"%Y%m%d_%H%M%S")
-  local base="${LABEL}_t$(printf '%02d' "$track")_s${side}_r${REVS}_${ts}"
-  local out_file="$RUN_DIR/${base}.raw"
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${track} -s ${side} -r ${REVS} -f '${out_file}' read"
+  local prefix="$RUN_DIR/track"
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${track} -s ${side} -r ${REVS} -f '${prefix}'"
   echo "[READ ] $cmd" | tee -a "$LOG_PATH"
   if [[ $DRY_RUN -eq 0 ]]; then
     eval "$cmd" | tee -a "$LOG_PATH"

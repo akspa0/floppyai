@@ -81,7 +81,7 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 {
   echo "capture_forensic_long_rev.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"; "$DTC_BIN" --version || true; echo
+  echo "dtc version:"; "$DTC_BIN" -V || true; echo
   echo "Track: ${TRACK}  Side: ${SIDE}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
 } > "$LOG_PATH"
@@ -90,9 +90,9 @@ echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_PATH"; sleep "$SPINUP"
 
 # Capture
 TS2=$(date +"%Y%m%d_%H%M%S")
-BASE="${LABEL}_t$(printf '%02d' "$TRACK")_s${SIDE}_r${REVS}_${TS2}"
-OUT_FILE="$RUN_DIR/${BASE}.raw"
-CMD="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${TRACK} -s ${SIDE} -r ${REVS} -f '${OUT_FILE}' read"
+# Use a standard prefix so dtc writes track%02d.%d.raw under RUN_DIR
+PREFIX="$RUN_DIR/track"
+CMD="${SUDO_PREFIX}${DTC_BIN} -d ${DRIVE} -i 0 -p -t ${TRACK} -s ${SIDE} -r ${REVS} -f '${PREFIX}'"
 echo "[READ ] $CMD" | tee -a "$LOG_PATH"
 if [[ $DRY_RUN -eq 0 ]]; then
   eval "$CMD" | tee -a "$LOG_PATH"
