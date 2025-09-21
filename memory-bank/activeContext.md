@@ -1,33 +1,31 @@
 # Active Context — FloppyAI
 
-Last updated: 2025-09-20 04:39 (local)
+Last updated: 2025-09-21 01:01 (local)
 
 ## Current Focus
-- Refactor Phase 2: migrate JSON and path helpers (`utils/json_io.py`, `utils/io_paths.py`), continue replacing direct `json.dump` calls.
-- Refactor Phase 3: move `analyze_disk()` from `main.py` to `analysis/analyze_disk.py` and let CLI delegate.
-- Experiments initiative:
-  - Docs created: `docs/experiments/index.md`, `docs/experiments/01-extreme-streams.md`, `docs/experiments/02-high-density-encoding.md`, `_template.md`.
-  - Plan to add `cmd_experiments.py` and `analysis/metrics.py`.
-  - Hardware orchestration: Do NOT build or rely on a cross-machine DTC wrapper. Hardware steps will be executed on the Linux DTC host via bash scripts; Windows runs default to `--simulate`.
+- Visualization and overlay fidelity on full-disk runs.
+- Reduce CLI friction with profile‑driven defaults (MFM vs GCR) while keeping forensic‑rich outputs concise.
 
 ## Recent Changes
-- CLI modularization complete for Phase 1; subcommands live in `cmd_stream_ops.py`, `cmd_corpus.py`, `cmd_diff.py`.
-- `main.py` updated to import subcommand handlers and use `utils.json_io.dump_json` for writes.
-- README updated to emphasize `python -m FloppyAI.src.main` and expanded examples.
-- New docs: usage, cheatsheet, docs index; experiments folder introduced.
+- Visualization fixes and enhancements:
+  - `render_instability_map()` now accepts the surface map and renders angular‑resolved instability when available; colormap switched to `magma_r` with percentile contrast for bright hotspots.
+  - Side report and dashboard instability panels use the same angular‑resolved profile and contrast.
+  - Wedge spokes, sector labels, and intra‑wedge peak markers integrated across surface, side reports, and dashboard.
+- Overlay simplification:
+  - Added GCR profiles `35DDGCR`, `35HDGCR`, `525DDGCR`.
+  - `--overlay-mode` defaults to `auto`; in `analysis/analyze_disk.py` it is profile‑driven (GCR profiles → GCR; others → MFM). GCR candidates auto‑selected per profile.
+  - Gentle log notes when overlay mode conflicts with the chosen profile.
+- Docs updated (`README.md`, `docs/usage.md`) to reflect simplified commands and brighter instability visuals.
 
 ## Next Steps
-- Finish Phase 2 replacements in `main.py` and any command modules still using `json.dump` directly.
-- Implement Phase 3 by moving `analyze_disk` logic into `analysis/analyze_disk.py`.
-- Add `cmd_experiments.py` (orchestrator) and `analysis/metrics.py`.
-- Extend `generate` with advanced patterns (`--pattern`, `--seed`, pattern-specific flags).
-- Safety gates for hardware runs; default to `--simulate` and outer tracks.
-- Document and use Linux-side bash scripts for hardware I/O on the DTC host (sudo required). Cross-machine flows are manual: copy generated `.raw` to Linux, run scripts, copy captures back, then analyze on Windows.
+- Validate sector overlay results on representative MFM and GCR datasets; fine‑tune candidate lists per zone if needed.
+- Consider optional `--overlay-fill` (subtle wedge shading) to further emphasize sectors.
+- Extend experiments docs with guidance on forensic‑rich captures and multi‑read comparisons; keep per‑side composites to avoid PNG spam.
+- Continue Phase 2 cleanup (ensure all JSON writes use `utils.json_io.dump_json`).
 
 ## Open Decisions
-- Orchestration style: internal calls vs subprocess for `experiment` (prefer internal; retain subprocess fallback for isolation/packaging).
-- Storage of intended sequences for correlation (store params + checksum vs full intended intervals).
-- Cross-machine automation: SSH-based orchestration is explicitly out of scope. Keep hardware steps manual on the Linux host for safety and simplicity.
+- Whether to expose a user knob for instability contrast percentile; currently hard‑coded to a sensible default.
+- Optional addition of per‑track overlay JSON for zoned GCR in future iterations.
 
 ## Links
 - README: `../README.md`
