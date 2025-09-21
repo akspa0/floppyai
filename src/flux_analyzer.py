@@ -379,8 +379,9 @@ class FluxAnalyzer:
         trans_per_rev = [len(rev) for rev in self.revolutions if isinstance(rev, np.ndarray) and len(rev) > 0]
         dens_est = int(float(np.mean(trans_per_rev))) if trans_per_rev else 0
 
-        # Optional angular histogram over a single representative revolution set
+        # Optional angular histogram over revolutions
         angular_hist = None
+        per_rev_hists = []  # for instability computations
         if angular_bins is None:
             angular_bins = 0
         try:
@@ -388,8 +389,7 @@ class FluxAnalyzer:
         except Exception:
             bins = 0
         if bins and bins > 0 and self.revolutions:
-            hist = np.zeros(bins, dtype=float)
-            used = 0
+            hist_sum = np.zeros(bins, dtype=float)
             for rev in self.revolutions:
                 if not isinstance(rev, np.ndarray) or rev.size < 4:
                     continue
@@ -399,13 +399,14 @@ class FluxAnalyzer:
                     continue
                 idx = np.floor((t / total) * bins).astype(int)
                 idx[idx >= bins] = bins - 1
-                for k in idx:
-                    hist[k] += 1.0
-                used += 1
-            if used > 0:
-                # Normalize 0..1 for visualization stability
-                m = float(np.max(hist)) if np.max(hist) > 0 else 1.0
-                angular_hist = (hist / m).tolist()
+                h = np.bincount(idx, minlength=bins).astype(np.float64)
+                # Normalize each rev hist by its max for stability (0..1)
+                hm = float(np.max(h))
+                per_rev_hists.append(h / hm if hm > 0 else h)
+                hist_sum += h
+            if len(per_rev_hists) > 0:
+                m = float(np.max(hist_sum)) if np.max(hist_sum) > 0 else 1.0
+                angular_hist = (hist_sum / m).tolist()
 
         # Optional interval histogram (log-spaced over [min_ns, max_ns])
         interval_hist = None
@@ -427,6 +428,64 @@ class FluxAnalyzer:
         except Exception:
             pass
 
+        # Instability v2 (flux-level)
+        # - phase variance across revolutions (using per_rev_hists)
+        # - cross-rev coherence (mean correlation to mean profile)
+        # - outlier rate (short/long intervals)
+        # - gap rate (very long intervals)
+        phase_var_p95 = None
+        phase_incoherence = None
+        outlier_rate = 0.0
+        gap_rate = 0.0
+
+        # Outlier/gap rates
+        vals = self.flux_data.astype(np.float64) if self.flux_data is not None else np.array([], dtype=np.float64)
+        n_vals = float(vals.size)
+        if n_vals > 0:
+            short_thr = 0.5 * mean if mean > 0 else 0
+            long_thr = mean + 3 * std if std > 0 else 0
+            gap_thr = max(mean + 4 * std, 2.5 * mean) if mean > 0 else 0
+            short_rate = float(np.mean(vals < short_thr)) if short_thr > 0 else 0.0
+            long_rate = float(np.mean(vals > long_thr)) if long_thr > 0 else 0.0
+            outlier_rate = 0.5 * (short_rate + long_rate)
+            gap_rate = float(np.mean(vals > gap_thr)) if gap_thr > 0 else 0.0
+
+        # Phase variance and cross-rev coherence
+        if len(per_rev_hists) >= 2:
+            H = np.stack(per_rev_hists, axis=0)  # [R, bins], each row in 0..1
+            # Variance per angular bin across revolutions
+            var_bins = np.var(H, axis=0)
+            try:
+                phase_var_p95 = float(np.percentile(var_bins, 95))
+            except Exception:
+                phase_var_p95 = float(np.max(var_bins)) if var_bins.size else 0.0
+            # Correlation of each rev to the mean profile
+            mu = np.mean(H, axis=0)
+            def _corr(a, b):
+                sa = np.std(a); sb = np.std(b)
+                if sa <= 1e-12 or sb <= 1e-12:
+                    return 1.0
+                return float(np.corrcoef(a, b)[0, 1])
+            corrs = [max(-1.0, min(1.0, _corr(row, mu))) for row in H]
+            mean_corr = float(np.mean(corrs)) if len(corrs) > 0 else 1.0
+            # Invert to an instability-like value, clipped to 0..1
+            phase_incoherence = float(1.0 - np.clip(mean_corr, 0.0, 1.0))
+        else:
+            phase_var_p95 = 0.0
+            phase_incoherence = 0.0
+
+        # Combine into a 0..1 score (heuristic weights)
+        w_var = 0.4; w_incoh = 0.3; w_gap = 0.2; w_out = 0.1
+        instability_score = float(
+            np.clip(
+                w_var * (phase_var_p95 or 0.0)
+                + w_incoh * (phase_incoherence or 0.0)
+                + w_gap * (gap_rate or 0.0)
+                + w_out * (outlier_rate or 0.0),
+                0.0, 1.0
+            )
+        )
+
         return {
             'anomalies': anomalies,
             'noise_profile': noise_profile,
@@ -436,6 +495,13 @@ class FluxAnalyzer:
             'interval_hist_bins': (ih_bins if ih_bins > 0 else None),
             'interval_hist_range_ns': ih_range,
             'interval_hist': interval_hist,
+            'instability_features': {
+                'phase_var_p95': phase_var_p95,
+                'phase_incoherence': phase_incoherence,
+                'outlier_rate': outlier_rate,
+                'gap_rate': gap_rate,
+            },
+            'instability_score': instability_score,
         }
 
     def visualize(self, base_path, plot_type='intervals'):

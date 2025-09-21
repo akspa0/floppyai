@@ -303,6 +303,7 @@ def analyze_corpus(args):
                     gcr_candidates=getattr(args, 'gcr_candidates', '10,12,8,9,11,13'),
                     overlay_sectors_hint=getattr(args, 'overlay_sectors_hint', None),
                     export_format='png',
+                    align_to_sectors=getattr(args, 'align_to_sectors', 'off'),
                 )
                 analyze_disk(disk_args)
                 # Verify that surface_map.json was produced; if missing, track it
@@ -1342,6 +1343,12 @@ def main():
     analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
     analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint")
     analyze_disk_parser.add_argument("--export-format", choices=["png","svg","both"], default="png", dest="export_format", help="Output format for figures (default: png)")
+    # Fidelity presets and overrides
+    analyze_disk_parser.add_argument("--quality", choices=["normal","high","ultra"], default="ultra", dest="quality", help="Rendering fidelity preset (default: ultra)")
+    analyze_disk_parser.add_argument("--theta-samples", type=int, dest="theta_samples", help="Override angular resolution (samples around circle)")
+    analyze_disk_parser.add_argument("--radial-upsample", type=int, dest="radial_upsample", help="Override radial upsample factor")
+    analyze_disk_parser.add_argument("--render-dpi", type=int, dest="render_dpi", help="Override figure save DPI")
+    analyze_disk_parser.add_argument("--align-to-sectors", choices=["off","side","track","auto"], default="off", dest="align_to_sectors", help="Rotate polar plots so sector 0° aligns to detected boundary (default: off; auto = side)")
     analyze_disk_parser.set_defaults(func=(analyze_disk_cmd if analyze_disk_cmd else lambda _args: (print("analyze_disk not available"), 1)[1]))
 
     # Analyze Corpus

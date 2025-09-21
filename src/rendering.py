@@ -5,6 +5,140 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 
+def resolve_render_params(args):
+    """Resolve rendering fidelity parameters from args with sensible defaults.
+
+    Returns (theta_samples, radial_upsample, dpi)
+    """
+    # Presets
+    quality = str(getattr(args, 'quality', 'ultra') or 'ultra').lower()
+    if quality == 'normal':
+        theta_samples = 1440
+        radial_upsample = 4
+        dpi = 180
+    elif quality == 'high':
+        theta_samples = 2880
+        radial_upsample = 6
+        dpi = 220
+    else:  # ultra
+        theta_samples = 4096
+        radial_upsample = 8
+        dpi = 260
+
+    # Overrides
+    ts = getattr(args, 'theta_samples', None)
+    if isinstance(ts, int) and ts > 0:
+        theta_samples = ts
+    ru = getattr(args, 'radial_upsample', None)
+    if isinstance(ru, int) and ru > 0:
+        radial_upsample = ru
+    rd = getattr(args, 'render_dpi', None)
+    if isinstance(rd, int) and rd > 0:
+        dpi = rd
+    return int(theta_samples), int(radial_upsample), int(dpi)
+
+
+def _theta_offset_for_side(sm: dict, args, side: int) -> float:
+    """Return radians to rotate axis so first detected sector boundary is at 0°.
+    Uses overlay insights if available. Honors args.align_to_sectors.
+    """
+    try:
+        mode = str(getattr(args, 'align_to_sectors', 'off') or 'off').lower()
+    except Exception:
+        mode = 'off'
+    if mode == 'off':
+        return 0.0
+    # Fallback strategy: we only have side-level boundaries; track-level uses side-level too.
+    try:
+        overlay = sm.get('global', {}).get('insights', {}).get('overlay', {})
+        by_side = overlay.get('by_side', {}) if isinstance(overlay, dict) else {}
+        bdeg = by_side.get(str(side), {}).get('boundaries_deg', []) if isinstance(by_side, dict) else []
+        if isinstance(bdeg, list) and bdeg:
+            first = float(bdeg[0])
+            return float(-np.deg2rad(first))
+    except Exception:
+        pass
+    # Heuristic fallback: align strongest angular peak to 0° if periodicity is present
+    try:
+        insights = sm.get('global', {}).get('insights', {})
+        fmt = insights.get('formatted', {}) if isinstance(insights, dict) else {}
+        entry = fmt.get('by_side', {}).get(str(side), {}) if isinstance(fmt, dict) else {}
+        if mode in ('auto', 'side'):
+            # Aggregate angular histogram across tracks for this side
+            bins = 0
+            for tk in sm:
+                if tk == 'global':
+                    continue
+                v = sm[tk]
+                ent_list = v.get(str(side), []) if isinstance(v, dict) else []
+                if isinstance(ent_list, dict):
+                    ent_list = [ent_list]
+                if not ent_list:
+                    continue
+                ent = ent_list[0]
+                b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                if isinstance(b, int) and b > bins:
+                    bins = b
+            if bins and bins > 0:
+                agg = np.zeros(bins, dtype=float)
+                used = 0
+                for tk in sm:
+                    if tk == 'global':
+                        continue
+                    v = sm[tk]
+                    ent_list = v.get(str(side), []) if isinstance(v, dict) else []
+                    if isinstance(ent_list, dict):
+                        ent_list = [ent_list]
+                    if not ent_list:
+                        continue
+                    ent = ent_list[0]
+                    ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                    b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                    if isinstance(ah, list) and isinstance(b, int) and b == bins:
+                        agg[:b] += np.array(ah[:b], dtype=float)
+                        used += 1
+                if used > 0 and np.max(agg) > 0:
+                    # Check for periodicity strength via FFT peak ratio
+                    H = np.abs(np.fft.rfft(agg))
+                    if H.size > 1:
+                        H[0] = 0.0
+                    median_spec = float(np.median(H[1:])) if H.size > 1 else 1.0
+                    k_best = int(np.argmax(H)) if H.size > 0 else 0
+                    v_best = float(H[k_best]) if H.size > 0 else 0.0
+                    ratio = (v_best / max(1e-9, median_spec)) if median_spec > 0 else 0.0
+                    if ratio >= 1.3:
+                        peak_bin = int(np.argmax(agg))
+                        peak_theta = (peak_bin + 0.5) * (2 * np.pi / float(bins))
+                        return float(-peak_theta)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _formatted_badge(sm: dict, side: int) -> str:
+    """Build a short badge string for titles based on formatted detection insights."""
+    try:
+        insights = sm.get('global', {}).get('insights', {})
+        fmt = insights.get('formatted', {}) if isinstance(insights, dict) else {}
+        entry = fmt.get('by_side', {}).get(str(side), {}) if isinstance(fmt, dict) else {}
+        if not isinstance(entry, dict):
+            return ''
+        if entry.get('formatted') is True:
+            mode = entry.get('mode', 'mfm')
+            k = entry.get('sector_count')
+            conf = entry.get('confidence')
+            part_k = f", k={int(k)}" if isinstance(k, int) else ""
+            part_c = f", conf={conf:.2f}" if isinstance(conf, (int, float)) else ""
+            return f"Formatted ({mode}{part_k}{part_c})"
+        if entry.get('formatted') is False:
+            conf = entry.get('confidence')
+            part_c = f" conf={conf:.2f}" if isinstance(conf, (int, float)) else ""
+            return f"Unformatted{part_c}"
+    except Exception:
+        pass
+    return 'Format: unknown'
+
+
 def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     """Render combined polar disk surface and per-side overlays using data in sm.
     - sm: surface_map dict with 'global' and per-track entries
@@ -72,9 +206,12 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     else:
         vmin, vmax = 0.0, 1.0
 
+    # Resolve fidelity
+    theta_samples, radial_upsample, dpi = resolve_render_params(args)
+
     # Upsample radial resolution for smoother rendering
     # Use [0, T] so a single track (T=1) still has non-zero radial extent
-    up_factor = 4
+    up_factor = radial_upsample
     Tu = max(T * up_factor, T)
     r_up = np.linspace(0, T, Tu)
 
@@ -89,8 +226,78 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     radial_up = {s: upsample(radials[s], masks[s]) for s in [0, 1]}
 
     # Build high-fidelity grids
-    theta = np.linspace(0, 2 * np.pi, 1440)
+    theta = np.linspace(0, 2 * np.pi, int(theta_samples))
     TH, R = np.meshgrid(theta, r_up)
+
+    # Build angular templates per track per side from aggregated angular histograms
+    def interp_hist_to_theta(hist: np.ndarray, bins: int) -> np.ndarray:
+        th_centers = (np.arange(bins) + 0.5) * (2 * np.pi / float(bins))
+        # Wrap theta to [0, 2pi)
+        th = theta % (2 * np.pi)
+        # Interpolate with wrap-around by extending
+        x = np.concatenate([th_centers - 2 * np.pi, th_centers, th_centers + 2 * np.pi])
+        y = np.concatenate([hist, hist, hist])
+        return np.interp(th, x, y)
+
+    def build_side_templates(side: int):
+        templates = [None] * T
+        bins_max = 0
+        # First pass: find max bins available
+        for tk in sm:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            lst = sm[tk].get(str(side), []) if isinstance(sm[tk], dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if not lst:
+                continue
+            ent = lst[0]
+            b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(b, int) and b > bins_max:
+                bins_max = b
+        # Second pass: build per-track template
+        for tk in sm:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            lst = sm[tk].get(str(side), []) if isinstance(sm[tk], dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            template = np.ones_like(theta)
+            if lst:
+                ent = lst[0]
+                ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                if isinstance(ah, list) and isinstance(b, int) and b > 1:
+                    h = np.array(ah[:b], dtype=float)
+                    m = float(np.max(h))
+                    if m > 0:
+                        h = h / m
+                    template = interp_hist_to_theta(h, b)
+            templates[ti] = template
+        # Fill any None with ones
+        for i in range(T):
+            if templates[i] is None:
+                templates[i] = np.ones_like(theta)
+        return templates
+
+    templates = {s: build_side_templates(s) for s in [0, 1]}
+    # Normalize densities per side for angular-weighted visualization
+    dens_norm = {}
+    for s in [0, 1]:
+        den = radials[s]
+        m = float(np.max(den[masks[s]])) if masks[s].any() else 0.0
+        if m <= 0:
+            dens_norm[s] = np.zeros_like(den)
+        else:
+            dens_norm[s] = den / m
 
     # Layout: side0 | side1 | colorbar
     fig = plt.figure(figsize=(13, 5.5))
@@ -101,13 +308,25 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
 
     pcm = None
     for ax, side in [(ax0, 0), (ax1, 1)]:
+        # Apply sector alignment offset if requested
+        try:
+            off = _theta_offset_for_side(sm, args, side)
+            if abs(off) > 1e-9:
+                ax.set_theta_offset(off)
+        except Exception:
+            pass
         if counts[side] > 0 and masks[side].any():
-            Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
+            # Build angular-weighted Z using nearest-track template × normalized density
+            Z = np.zeros((r_up.shape[0], theta.shape[0]), dtype=float)
+            for ri, rv in enumerate(r_up):
+                ti = int(np.clip(int(round(rv)), 0, T - 1))
+                Z[ri, :] = templates[side][ti] * float(dens_norm[side][ti])
             pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
             ax.set_ylim(0, T)
             ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
             ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-            ax.set_title(f"Side {side}")
+            badge = _formatted_badge(sm, side)
+            ax.set_title(f"Side {side} – {badge}")
         else:
             ax.set_title(f"Side {side} (no data)")
             ax.set_ylim(0, T)
@@ -115,7 +334,7 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
 
     if pcm is not None:
         cbar = fig.colorbar(pcm, cax=cax, orientation='vertical')
-        cbar.set_label('Bits per Revolution')
+        cbar.set_label('Angular-Weighted Density (norm)')
 
     plt.tight_layout()
     # Support export format (png|svg|both); default png
@@ -123,7 +342,7 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
     base = Path(str(out_prefix) + "_disk_surface")
     try:
         if fmt in ('png', 'both'):
-            plt.savefig(str(base.with_suffix('.png')), dpi=220)
+            plt.savefig(str(base.with_suffix('.png')), dpi=dpi)
         if fmt in ('svg', 'both'):
             # Rasterize pcolormesh where possible
             try:
@@ -135,7 +354,7 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
                             pass
             except Exception:
                 pass
-            plt.savefig(str(base.with_suffix('.svg')), dpi=220, format='svg')
+            plt.savefig(str(base.with_suffix('.svg')), dpi=dpi, format='svg')
     finally:
         plt.close()
 
@@ -200,11 +419,16 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         plt.tight_layout()
         fmt = str(getattr(args, 'export_format', 'png') or 'png').lower()
         base = Path(str(out_prefix) + f"_side{side}_report")
+        # Resolve dpi for consistent export
+        try:
+            _, _, dpi = resolve_render_params(args)
+        except Exception:
+            dpi = 180
         try:
             if fmt in ('png', 'both'):
-                plt.savefig(str(base.with_suffix('.png')), dpi=180)
+                plt.savefig(str(base.with_suffix('.png')), dpi=dpi)
             if fmt in ('svg', 'both'):
-                plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+                plt.savefig(str(base.with_suffix('.svg')), dpi=dpi, format='svg')
         finally:
             plt.close()
         return
@@ -215,8 +439,11 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     if vmax <= vmin:
         vmax = vmin + 1.0
 
+    # Resolve fidelity
+    theta_samples, radial_upsample, dpi = resolve_render_params(args)
+
     # Upsample radial
-    up_factor = 4
+    up_factor = radial_upsample
     Tu = max(T * up_factor, T)
     r_up = np.linspace(0, T, Tu)
     if has.sum() >= 2:
@@ -226,7 +453,7 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     else:
         fill = float(radial[has][0]) if has.any() else 0.0
         radial_up = np.full_like(r_up, fill, dtype=float)
-    theta = np.linspace(0, 2 * np.pi, 1440)
+    theta = np.linspace(0, 2 * np.pi, int(theta_samples))
     TH, R = np.meshgrid(theta, r_up)
 
     # Overlay lines for this side
@@ -326,18 +553,58 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     gs = GridSpec(3, 2, height_ratios=[2.0, 1.6, 1.2], width_ratios=[1.0, 1.0], figure=fig)
     # Top: surface polar
     ax_surf = fig.add_subplot(gs[0, :], projection='polar')
-    Z = np.repeat(radial_up[:, None], theta.shape[0], axis=1)
-    pcm = ax_surf.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+    # Apply sector alignment and formatted badge
+    try:
+        off_side = _theta_offset_for_side(sm, args, side)
+        if abs(off_side) > 1e-9:
+            ax_surf.set_theta_offset(off_side)
+    except Exception:
+        pass
+    # Build angular-aware template per track for this side
+    def _template_for_track(ti: int):
+        try:
+            lst = sm.get(str(ti), {}).get(str(side), []) if isinstance(sm.get(str(ti)), dict) else []
+            if isinstance(lst, dict):
+                lst = [lst]
+            if lst:
+                ent = lst[0]
+                ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                if isinstance(ah, list) and isinstance(b, int) and b > 1:
+                    h = np.array(ah[:b], dtype=float)
+                    m = float(np.max(h))
+                    if m > 0:
+                        h = h / m
+                    # Interpolate onto theta grid
+                    th_centers = (np.arange(b) + 0.5) * (2 * np.pi / float(b))
+                    x = np.concatenate([th_centers - 2*np.pi, th_centers, th_centers + 2*np.pi])
+                    y = np.concatenate([h, h, h])
+                    return np.interp(theta % (2*np.pi), x, y)
+        except Exception:
+            pass
+        return np.ones_like(theta)
+
+    # Normalize density per track for this side
+    dmax = float(np.max(radial[has])) if has.any() else 0.0
+    dnorm = (radial / dmax) if dmax > 0 else np.zeros_like(radial)
+    # Build angular-weighted Z
+    Z = np.zeros((r_up.shape[0], theta.shape[0]), dtype=float)
+    for ri, rv in enumerate(r_up):
+        ti = int(np.clip(int(round(rv)), 0, T - 1))
+        tpl = _template_for_track(ti)
+        Z[ri, :] = tpl * float(dnorm[ti])
+    pcm = ax_surf.pcolormesh(TH, R, Z, cmap='viridis', vmin=0.0, vmax=1.0, shading='auto')
     ax_surf.set_ylim(0, T)
     ax_surf.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
     ax_surf.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-    ax_surf.set_title(f"Side {side} – Density per Track (bits/rev)")
+    badge = _formatted_badge(sm, side)
+    ax_surf.set_title(f"Side {side} – {badge} – Angular-Weighted Density")
     if thetas_overlay:
         ov_color = getattr(args, 'overlay_color', '#ff3333')
         ov_alpha = float(getattr(args, 'overlay_alpha', 0.8))
         for th in thetas_overlay:
             ax_surf.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.9)
-    fig.colorbar(pcm, ax=ax_surf, orientation='vertical', pad=0.1)
+    fig.colorbar(pcm, ax=ax_surf, orientation='vertical', pad=0.1, label='Angular-Weighted Density (norm)')
     # Rasterize heavy mesh for SVG friendliness while keeping labels/ticks vector
     try:
         pcm.set_rasterized(True)
@@ -346,6 +613,11 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
 
     # Middle-left: instability polar for this side
     ax_inst = fig.add_subplot(gs[1, 0], projection='polar')
+    try:
+        if abs(off_side) > 1e-9:
+            ax_inst.set_theta_offset(off_side)
+    except Exception:
+        pass
     # Build instability radial for this side
     inst_rad = np.zeros(T)
     for ti in range(T):
@@ -406,9 +678,9 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     base = Path(str(out_prefix) + f"_side{side}_report")
     try:
         if fmt in ('png', 'both'):
-            plt.savefig(str(base.with_suffix('.png')), dpi=180)
+            plt.savefig(str(base.with_suffix('.png')), dpi=dpi)
         if fmt in ('svg', 'both'):
-            plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+            plt.savefig(str(base.with_suffix('.svg')), dpi=dpi, format='svg')
     finally:
         plt.close()
 
@@ -553,8 +825,11 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
         max_track = 83
     T = max(max_track + 1, 1)
 
+    # Resolve fidelity
+    theta_samples, radial_upsample, dpi = resolve_render_params(args)
+
     # Common angular grid
-    theta = np.linspace(0, 2 * np.pi, 1440)
+    theta = np.linspace(0, 2 * np.pi, int(theta_samples))
 
     # Build density radials and color scale across sides
     radials = {}
@@ -593,7 +868,7 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
         vmin, vmax = 0.0, 1.0
 
     # Upsample radial
-    up_factor = 4
+    up_factor = radial_upsample
     Tu = max(T * up_factor, T)
     r_up = np.linspace(0, T, Tu)
     def upsample(radial, has):
@@ -677,12 +952,50 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
     # Row 1: density polar side0 | side1
     for col, side in enumerate([0, 1]):
         ax = fig.add_subplot(gs[0, col], projection='polar')
-        Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
-        pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+        try:
+            off = _theta_offset_for_side(sm, args, side)
+            if abs(off) > 1e-9:
+                ax.set_theta_offset(off)
+        except Exception:
+            pass
+        # Build angular templates per track for this side
+        def _tpl_for_track_dashboard(ti: int, side_: int):
+            try:
+                lst = sm.get(str(ti), {}).get(str(side_), []) if isinstance(sm.get(str(ti)), dict) else []
+                if isinstance(lst, dict):
+                    lst = [lst]
+                if lst:
+                    ent = lst[0]
+                    ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                    b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                    if isinstance(ah, list) and isinstance(b, int) and b > 1:
+                        h = np.array(ah[:b], dtype=float)
+                        m = float(np.max(h))
+                        if m > 0:
+                            h = h / m
+                        th_centers = (np.arange(b) + 0.5) * (2 * np.pi / float(b))
+                        x = np.concatenate([th_centers - 2*np.pi, th_centers, th_centers + 2*np.pi])
+                        y = np.concatenate([h, h, h])
+                        return np.interp(theta % (2*np.pi), x, y)
+            except Exception:
+                pass
+            return np.ones_like(theta)
+        # Normalize density per track for this side
+        den = radials[side]
+        mden = float(np.max(den[masks[side]])) if masks[side].any() else 0.0
+        dnorm = (den / mden) if mden > 0 else np.zeros_like(den)
+        # Build Z
+        Z = np.zeros((r_up.shape[0], theta.shape[0]), dtype=float)
+        for ri, rv in enumerate(r_up):
+            ti = int(np.clip(int(round(rv)), 0, T - 1))
+            tpl = _tpl_for_track_dashboard(ti, side)
+            Z[ri, :] = tpl * float(dnorm[ti])
+        pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=0.0, vmax=1.0, shading='auto')
         ax.set_ylim(0, T)
         ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
         ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
-        ax.set_title(f"Side {side} – Density")
+        badge = _formatted_badge(sm, side)
+        ax.set_title(f"Side {side} – {badge} – Angular-Weighted Density")
         try:
             pcm.set_rasterized(True)
         except Exception:
@@ -702,6 +1015,12 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
     # Row 2: instability polar side0 | side1
     for col, side in enumerate([0, 1]):
         ax = fig.add_subplot(gs[1, col], projection='polar')
+        try:
+            off = _theta_offset_for_side(sm, args, side)
+            if abs(off) > 1e-9:
+                ax.set_theta_offset(off)
+        except Exception:
+            pass
         inst_rad = np.array([float(instab_scores.get(side, {}).get(ti, 0.0)) for ti in range(T)])
         Zr = np.interp(r_up, np.arange(T), inst_rad)
         Z = np.repeat(Zr[:, None], theta.shape[0], axis=1)
@@ -752,8 +1071,8 @@ def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args)
     base = Path(str(out_prefix) + "_dashboard")
     try:
         if fmt in ('png', 'both'):
-            plt.savefig(str(base.with_suffix('.png')), dpi=180)
+            plt.savefig(str(base.with_suffix('.png')), dpi=dpi)
         if fmt in ('svg', 'both'):
-            plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+            plt.savefig(str(base.with_suffix('.svg')), dpi=dpi, format='svg')
     finally:
         plt.close()

@@ -117,7 +117,17 @@ def run(args):
     overlay_cfg = surface_map['global']['insights']['overlay']
     fmt_enabled = getattr(args, 'format_overlay', False)
     overlay_cfg['format_overlay_enabled'] = fmt_enabled
-    overlay_cfg['angular_bins'] = getattr(args, 'angular_bins', 0)
+    # Determine effective angular bins (auto from quality if not specified)
+    try:
+        q = str(getattr(args, 'quality', 'ultra') or 'ultra').lower()
+    except Exception:
+        q = 'ultra'
+    user_bins = int(getattr(args, 'angular_bins', 0) or 0)
+    if user_bins > 0:
+        effective_ang_bins = user_bins
+    else:
+        effective_ang_bins = 720 if q in ('high', 'ultra') else 360
+    overlay_cfg['angular_bins'] = effective_ang_bins
     # If profile suggests MFM, default overlay mode to mfm
     default_overlay_mode = 'mfm' if (profile in ['35HD', '35DD', '525HD', '525DD'] or inferred_rpm == 300.0) else 'mfm'
     overlay_mode = getattr(args, 'overlay_mode', default_overlay_mode)
@@ -180,9 +190,8 @@ def run(args):
                 log(f"Warning: No flux data in {raw_file}, skipping")
                 continue
 
-            # Perform analysis (compute angular histogram if bins specified)
-            ang_bins = int(getattr(args, 'angular_bins', 0) or 0)
-            analysis = analyzer.analyze(ang_bins if ang_bins > 0 else None)
+            # Perform analysis using effective angular bins
+            analysis = analyzer.analyze(effective_ang_bins if effective_ang_bins > 0 else None)
 
             # Per-file plots disabled by default to reduce output volume and speed up runs.
             # If needed, we can gate this behind a CLI flag in the future.
@@ -204,7 +213,7 @@ def run(args):
             # Add overlay information if enabled (populate global.insights.overlay.by_side)
             if getattr(args, 'format_overlay', False):
                 try:
-                    bins = int(getattr(args, 'angular_bins', 720) or 720)
+                    bins = int(effective_ang_bins or 720)
                     mode = str(getattr(args, 'overlay_mode', 'mfm')).lower()
                     files = [str(raw_file)]
                     k = None; bdeg = []; conf = 0.0
@@ -275,6 +284,111 @@ def run(args):
         # Output base prefix
         base_name = str(run_dir / Path(input_path.name).stem)
 
+        # Formatted vs Unformatted heuristic per side (do this first so badges/offsets are ready)
+        try:
+            fmt_block = surface_map['global']['insights'].get('formatted', {}) if isinstance(surface_map['global'].get('insights'), dict) else {}
+            by_side_fmt = fmt_block.get('by_side', {}) if isinstance(fmt_block, dict) else {}
+            # Prefer overlay result when present
+            ov = surface_map['global']['insights'].get('overlay', {}) if isinstance(surface_map['global'].get('insights'), dict) else {}
+            ov_by_side = ov.get('by_side', {}) if isinstance(ov, dict) else {}
+
+            # Aggregate side-level angular histograms across tracks (if available)
+            def aggregate_side_hist(side: int):
+                bins = 0
+                # find max bins
+                for tk in surface_map:
+                    if tk == 'global':
+                        continue
+                    ent_list = surface_map[tk].get(str(side), []) if isinstance(surface_map[tk], dict) else []
+                    if isinstance(ent_list, dict):
+                        ent_list = [ent_list]
+                    if not ent_list:
+                        continue
+                    ent = ent_list[0]
+                    b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                    if isinstance(b, int) and b > bins:
+                        bins = b
+                if not bins:
+                    return None, 0
+                agg = np.zeros(bins, dtype=float)
+                used = 0
+                for tk in surface_map:
+                    if tk == 'global':
+                        continue
+                    ent_list = surface_map[tk].get(str(side), []) if isinstance(surface_map[tk], dict) else []
+                    if isinstance(ent_list, dict):
+                        ent_list = [ent_list]
+                    if not ent_list:
+                        continue
+                    ent = ent_list[0]
+                    ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                    b = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+                    if isinstance(ah, list) and isinstance(b, int) and b == bins and b > 0:
+                        agg[:b] += np.array(ah[:b], dtype=float)
+                        used += 1
+                if used > 0 and np.max(agg) > 0:
+                    agg = agg / float(np.max(agg))
+                return (agg if used > 0 else None), bins
+
+            def heuristic_k_from_hist(hist: np.ndarray, bins: int):
+                # FFT-based periodicity strength
+                if hist is None or bins <= 0:
+                    return None, 0.0
+                h = np.array(hist, dtype=float)
+                H = np.abs(np.fft.rfft(h))
+                # Ignore DC
+                H[0] = 0.0
+                # Candidate k range
+                candidates = list(range(6, min(36, bins // 2)))
+                if not candidates:
+                    return None, 0.0
+                peak_vals = [(k, H[k] if k < len(H) else 0.0) for k in candidates]
+                k_best, v_best = max(peak_vals, key=lambda kv: kv[1])
+                median_spec = float(np.median(H[1:])) if H.size > 1 else 1.0
+                ratio = (v_best / max(1e-9, median_spec)) if median_spec > 0 else 0.0
+                # Confidence: squash into 0..1
+                conf = float(np.tanh(0.3 * ratio))
+                return int(k_best), conf
+
+            formatted_block = {'by_side': {}}
+            for s in [0, 1]:
+                entry = {}
+                # Overlay first
+                ov_side = ov_by_side.get(str(s), {}) if isinstance(ov_by_side, dict) else {}
+                if isinstance(ov_side, dict) and ov_side.get('boundaries_deg'):
+                    entry = {
+                        'formatted': True,
+                        'confidence': float(ov_side.get('confidence', 0.8)),
+                        'mode': surface_map['global']['insights'].get('overlay', {}).get('overlay_mode', 'mfm'),
+                        'sector_count': int(ov_side.get('sector_count')) if ov_side.get('sector_count') is not None else None,
+                        'method': 'overlay',
+                    }
+                else:
+                    # Heuristic
+                    hist, bins = aggregate_side_hist(s)
+                    k, conf = heuristic_k_from_hist(hist, bins)
+                    if k is not None and conf > 0.4:
+                        entry = {
+                            'formatted': True,
+                            'confidence': float(conf),
+                            'mode': overlay_mode,
+                            'sector_count': int(k),
+                            'method': 'heuristic_fft',
+                        }
+                    else:
+                        entry = {
+                            'formatted': False,
+                            'confidence': float(1.0 - (conf or 0.0)),
+                            'mode': overlay_mode,
+                            'sector_count': None,
+                            'method': 'heuristic_fft',
+                        }
+                formatted_block['by_side'][str(s)] = entry
+
+            surface_map['global']['insights']['formatted'] = formatted_block
+        except Exception as e_fmt:
+            log(f"Warning: formatted/unformatted detection failed: {e_fmt}")
+
         # Create polar surface maps (pass args so overlay flags propagate)
         render_disk_surface(surface_map, base_name, args)
         # If only one track is present, render a single-track angular detail helper
@@ -283,10 +397,11 @@ def run(args):
             render_single_track_detail(surface_map, base_name)
 
         # Build and render instability map
-        # Compute simple instability scores from noise variance normalized per side
+        # Prefer new flux-level instability_score (0..1); fallback to noise variance with per-side normalization.
         instab_scores = {0: {}, 1: {}}
         max_track = 0
         side_vars = {0: [], 1: []}
+        side_has_abs_scale = {0: False, 1: False}
         for tk in surface_map:
             if tk == 'global':
                 continue
@@ -296,27 +411,50 @@ def run(args):
                 continue
             for s in [0, 1]:
                 entry_list = surface_map[tk].get(str(s), []) if isinstance(surface_map[tk], dict) else []
-                # Normalize: if it's a dict, wrap into a list
                 if isinstance(entry_list, dict):
                     entry_list = [entry_list]
+                # Aggregate across entries for this track/side
+                scores = []
+                vars_ = []
                 for ent in entry_list:
-                    var = None
                     try:
-                        var = ent.get('analysis', {}).get('noise_profile', {}).get('avg_variance')
+                        an = ent.get('analysis', {})
+                        sc = an.get('instability_score', None)
+                        if isinstance(sc, (int, float)):
+                            scores.append(float(sc))
+                        var = an.get('noise_profile', {}).get('avg_variance')
+                        if isinstance(var, (int, float)):
+                            vars_.append(float(var))
                     except Exception:
-                        var = None
-                    if isinstance(var, (int, float)):
-                        side_vars[s].append(float(var))
-                        instab_scores[s][ti] = float(var)
-        # Normalize per side
+                        continue
+                if scores:
+                    instab_scores[s][ti] = float(np.mean(scores))
+                    side_has_abs_scale[s] = True
+                elif vars_:
+                    vmean = float(np.mean(vars_))
+                    instab_scores[s][ti] = vmean
+                    side_vars[s].append(vmean)
+        # Normalize only variance-based sides; leave absolute 0..1 scores as-is
         for s in [0, 1]:
-            vmax = max(side_vars[s]) if side_vars[s] else 1.0
-            if vmax <= 0:
-                vmax = 1.0
-            for ti, v in list(instab_scores[s].items()):
-                instab_scores[s][ti] = float(min(1.0, max(0.0, v / vmax)))
+            if side_has_abs_scale[s]:
+                # Clamp to [0,1]
+                for ti, v in list(instab_scores[s].items()):
+                    instab_scores[s][ti] = float(min(1.0, max(0.0, v)))
+            else:
+                vmax = max(side_vars[s]) if side_vars[s] else 1.0
+                if vmax <= 0:
+                    vmax = 1.0
+                for ti, v in list(instab_scores[s].items()):
+                    instab_scores[s][ti] = float(min(1.0, max(0.0, v / vmax)))
 
         render_instability_map(instab_scores, max_track + 1, base_name)
+
+        # Create polar surface maps (pass args so overlay flags propagate)
+        render_disk_surface(surface_map, base_name, args)
+        # If only one track is present, render a single-track angular detail helper
+        track_keys = [k for k in surface_map.keys() if k != 'global']
+        if len(track_keys) == 1:
+            render_single_track_detail(surface_map, base_name)
 
         # Per-side composite reports (one PNG per side)
         try:
