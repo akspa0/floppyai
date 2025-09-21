@@ -1,8 +1,8 @@
 # FloppyAI
 
 <p align="center">
-  <a href="src/samples/disk1_composite_report.png">
-    <img src="src/samples/disk1_composite_report.png" alt="Sample per-disk composite report" width="600" />
+  <a href="src/samples/bugsbunny_dashboard.png">
+    <img src="src/samples/bugsbunny_dashboard.png" alt="Sample per-disk composite report" width="600" />
   </a>
   <br/>
   <em>Sample per‑disk composite: flux plots, polar disk surface (both sides), density/variance by track</em>
