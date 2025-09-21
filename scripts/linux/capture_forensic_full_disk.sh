@@ -31,6 +31,9 @@ Optional (common):
   --label <name>         Label used in filenames (default: full-disk)
   --no-sudo              Do not prefix dtc with sudo (default: sudo on)
   --dry-run              Print commands only; do not execute
+  --rich                 Enable extra dtc flags (-t1 -k1 and, unless disabled, -m2 -l63 -p)
+  --no-p                 When rich, do not include -p
+  --no-ml                When rich, do not include -m2 -l63
 
 Optional (capture profile):
   --profile <name>       One of: 35HD, 35DD, 525HD, 525DD (sets default track range)
@@ -64,6 +67,9 @@ STEP=1
 REVS=3
 COOLDOWN=2
 SPINUP=2
+RICH=0
+NO_P=0
+NO_ML=0
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -82,6 +88,9 @@ while [[ $# -gt 0 ]]; do
     --revs) REVS=${2:?}; shift 2;;
     --cooldown) COOLDOWN=${2:?}; shift 2;;
     --spinup) SPINUP=${2:?}; shift 2;;
+    --rich) RICH=1; shift 1;;
+    --no-p) NO_P=1; shift 1;;
+    --no-ml) NO_ML=1; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown option: $1" >&2; usage; exit 2;;
   esac
@@ -121,6 +130,7 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
 pushd "$RUN_DIR" >/dev/null
 LOG_FILE="run.log"
+umask 0002
 
 {
   echo "capture_forensic_full_disk.sh run at $(date -Iseconds)"
@@ -132,10 +142,22 @@ LOG_FILE="run.log"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
 } > "$LOG_FILE"
 
+build_read_cmd() {
+  local start=$1 end=$2 side=$3
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${start} -e${end} -g${side} -r${REVS} -ftrack"
+  if (( RICH == 1 )); then
+    # Add extras conservatively
+    if (( NO_ML == 0 )); then cmd+=" -m2 -l63"; fi
+    cmd+=" -t1 -k1"
+    if (( NO_P == 0 )); then cmd+=" -p"; fi
+  fi
+  echo "$cmd"
+}
+
 run_read() {
   local track=$1 side=$2
-  # Run within RUN_DIR and use simple prefix 'track' so files are track%02d.%d.raw
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
+  # Use builder; files are track%02d.%d.raw under current dir
+  local cmd=$(build_read_cmd "$track" "$track" "$side")
   echo "[READ ] $cmd"
   echo "[READ ] $cmd" >> "$LOG_FILE"
   if [[ $DRY_RUN -eq 0 ]]; then
@@ -149,15 +171,17 @@ capture_side() {
   sleep "$SPINUP"
   if (( STEP == 1 )); then
     # Single dtc invocation across the whole track range for this side with fallbacks
-    local cmd1="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -p -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+    local cmd1=$(build_read_cmd "$START_TRACK" "$END_TRACK" "$side")
     echo "[READ ] $cmd1" | tee -a "$LOG_FILE"
     if [[ $DRY_RUN -eq 0 ]]; then
       eval "$cmd1" | tee -a "$LOG_FILE"
     fi
     shopt -s nullglob; files=(track*.raw)
     if (( ${#files[@]} == 0 )); then
-      echo "WARN: No track*.raw found after first attempt; retrying without -p" | tee -a "$LOG_FILE"
-      local cmd2="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+      echo "WARN: No track*.raw found after first attempt; retrying with -ftrack.raw" | tee -a "$LOG_FILE"
+      # Modify -f argument from -ftrack to -ftrack.raw
+      local cmd2=$(build_read_cmd "$START_TRACK" "$END_TRACK" "$side")
+      cmd2=${cmd2/-ftrack/-ftrack.raw}
       echo "[READ ] $cmd2" | tee -a "$LOG_FILE"
       if [[ $DRY_RUN -eq 0 ]]; then
         eval "$cmd2" | tee -a "$LOG_FILE"
@@ -165,12 +189,12 @@ capture_side() {
       files=(track*.raw)
     fi
     if (( ${#files[@]} == 0 )); then
-      echo "WARN: Still no files; retrying without -m/-l toggles" | tee -a "$LOG_FILE"
-      local cmd3="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -t1 -k1 -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
-      echo "[READ ] $cmd3" | tee -a "$LOG_FILE"
-      if [[ $DRY_RUN -eq 0 ]]; then
-        eval "$cmd3" | tee -a "$LOG_FILE"
-      fi
+      echo "WARN: Still no files; retrying with per-track loop" | tee -a "$LOG_FILE"
+      local t=$START_TRACK
+      while (( t <= END_TRACK )); do
+        run_read "$t" "$side"
+        t=$(( t + 1 ))
+      done
       files=(track*.raw)
     fi
     if (( ${#files[@]} == 0 )); then

@@ -25,6 +25,9 @@ Optional (common):
   --label <name>        Label used in filenames (default: longrev)
   --no-sudo             Do not prefix dtc with sudo (default: sudo on)
   --dry-run             Print commands only; do not execute
+  --rich                Enable extra dtc flags (-t1 -k1 and, unless disabled, -m2 -l63 -p)
+  --no-p                When rich, do not include -p
+  --no-ml               When rich, do not include -m2 -l63
 
 Optional (capture profile):
   --revs <N>            Revolutions per capture (default: 3)
@@ -37,13 +40,16 @@ USAGE
 TRACK=""; SIDE=""
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="./captures"
+OUT_DIR="/srv/kryoflux/captures"
 LABEL="longrev"
 USE_SUDO=1
 DRY_RUN=0
 REVS=3
 COOLDOWN=5
 SPINUP=2
+RICH=0
+NO_P=0
+NO_ML=0
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -56,6 +62,9 @@ while [[ $# -gt 0 ]]; do
     --label) LABEL=${2:?}; shift 2;;
     --no-sudo) USE_SUDO=0; shift 1;;
     --dry-run) DRY_RUN=1; shift 1;;
+    --rich) RICH=1; shift 1;;
+    --no-p) NO_P=1; shift 1;;
+    --no-ml) NO_ML=1; shift 1;;
     --revs) REVS=${2:?}; shift 2;;
     --cooldown) COOLDOWN=${2:?}; shift 2;;
     --spinup) SPINUP=${2:?}; shift 2;;
@@ -79,28 +88,46 @@ SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
 pushd "$RUN_DIR" >/dev/null
 LOG_FILE="run.log"
+umask 0002
 
 {
   echo "capture_forensic_long_rev.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"; "$DTC_BIN" -V || true; echo
+  echo "dtc header:"; "$DTC_BIN" 2>&1 | head -n 4; echo
   echo "Track: ${TRACK}  Side: ${SIDE}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
 } > "$LOG_FILE"
 
 echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_FILE"; sleep "$SPINUP"
 
+build_read_cmd() {
+  local start=$1 end=$2 side=$3
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${start} -e${end} -g${side} -r${REVS} -ftrack"
+  if (( RICH == 1 )); then
+    if (( NO_ML == 0 )); then cmd+=" -m2 -l63"; fi
+    cmd+=" -t1 -k1"
+    if (( NO_P == 0 )); then cmd+=" -p"; fi
+  fi
+  echo "$cmd"
+}
+
 # Capture
 TS2=$(date +"%Y%m%d_%H%M%S")
-# Use a standard prefix so dtc writes track%02d.%d.raw under RUN_DIR
-PREFIX="$RUN_DIR/track"
-CMD="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -ftrack"
+CMD=$(build_read_cmd "$TRACK" "$TRACK" "$SIDE")
 echo "[READ ] $CMD" | tee -a "$LOG_FILE"
 if [[ $DRY_RUN -eq 0 ]]; then
   eval "$CMD" | tee -a "$LOG_FILE"
 fi
 
 echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_FILE"; sleep "$COOLDOWN"
+
+shopt -s nullglob; files=(track*.raw)
+if (( ${#files[@]} == 0 )); then
+  echo "ERROR: No track*.raw files were written. Listing directory:" | tee -a "$LOG_FILE"
+  pwd | tee -a "$LOG_FILE"
+  ls -la | tee -a "$LOG_FILE"
+  echo "Hints: reset KryoFlux/drive; try --rich/--no-p/--no-ml toggles; verify permissions." | tee -a "$LOG_FILE"
+fi
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_FILE"
 popd >/dev/null

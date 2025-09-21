@@ -23,6 +23,9 @@ Optional (common):
   --label <name>         Label used in filenames (default: sweep)
   --no-sudo              Do not prefix dtc with sudo (default: sudo on)
   --dry-run              Print commands only; do not execute
+  --rich                 Enable extra dtc flags (-t1 -k1 and, unless disabled, -m2 -l63 -p)
+  --no-p                 When rich, do not include -p
+  --no-ml                When rich, do not include -m2 -l63
 
 Optional (capture profile):
   --profile <name>       One of: 35HD, 35DD, 525HD, 525DD (sets default track range)
@@ -40,7 +43,7 @@ USAGE
 # Defaults
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="./captures"
+OUT_DIR="/srv/kryoflux/captures"
 LABEL="sweep"
 USE_SUDO=1
 DRY_RUN=0
@@ -53,6 +56,9 @@ SWEEPS=3
 REVS=3
 COOLDOWN=3
 SPINUP=2
+RICH=0
+NO_P=0
+NO_ML=0
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -72,6 +78,9 @@ while [[ $# -gt 0 ]]; do
     --revs) REVS=${2:?}; shift 2;;
     --cooldown) COOLDOWN=${2:?}; shift 2;;
     --spinup) SPINUP=${2:?}; shift 2;;
+    --rich) RICH=1; shift 1;;
+    --no-p) NO_P=1; shift 1;;
+    --no-ml) NO_ML=1; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown option: $1" >&2; usage; exit 2;;
   esac
@@ -110,22 +119,33 @@ LOG_PATH="$RUN_DIR/run.log"
 SUDO_PREFIX=""; [[ $USE_SUDO -eq 1 ]] && SUDO_PREFIX="sudo " || true
 
 pushd "$RUN_DIR" >/dev/null
+umask 0002
 
 {
   echo "capture_forensic_sweep.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"; "$DTC_BIN" -V || true; echo
+  echo "dtc header:"; "$DTC_BIN" 2>&1 | head -n 4; echo
   echo "Profile: ${PROFILE}  Sides: ${SIDES}  Tracks: ${START_TRACK}..${END_TRACK} step ${STEP}  Sweeps: ${SWEEPS}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
 } > "$LOG_PATH"
 
+build_read_cmd() {
+  local start=$1 end=$2 side=$3
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${start} -e${end} -g${side} -r${REVS} -ftrack"
+  if (( RICH == 1 )); then
+    if (( NO_ML == 0 )); then cmd+=" -m2 -l63"; fi
+    cmd+=" -t1 -k1"
+    if (( NO_P == 0 )); then cmd+=" -p"; fi
+  fi
+  echo "$cmd"
+}
+
 run_read() {
   local track=$1 side=$2
-  local ts=$(date +"%Y%m%d_%H%M%S")
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
+  local cmd=$(build_read_cmd "$track" "$track" "$side")
   echo "[READ ] $cmd" | tee -a "$LOG_PATH"
   if [[ $DRY_RUN -eq 0 ]]; then
-    bash -lc "$cmd" | tee -a "$LOG_PATH"
+    eval "$cmd" | tee -a "$LOG_PATH"
   fi
 }
 
@@ -160,4 +180,11 @@ if [[ "$SIDES" == "both" || "$SIDES" == "1" ]]; then
 fi
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+shopt -s nullglob; files=(track*.raw)
+if (( ${#files[@]} == 0 )); then
+  echo "ERROR: No track*.raw files were written. Listing directory:" | tee -a "$LOG_PATH"
+  pwd | tee -a "$LOG_PATH"
+  ls -la | tee -a "$LOG_PATH"
+  echo "Hints: reset KryoFlux/drive; try --rich/--no-p/--no-ml toggles; verify permissions." | tee -a "$LOG_PATH"
+fi
 popd >/dev/null
