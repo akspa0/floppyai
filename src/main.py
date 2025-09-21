@@ -1381,7 +1381,7 @@ def main():
     silk.add_argument("image", help="Path to input image (any resolution)")
     silk.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
     silk.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
-    silk.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
+    silk.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR","auto"], help="Profile to set safe track limits and RPM default")
     silk.add_argument("--rpm", type=float, default=None, help="Drive RPM (default from profile; fallback 300 if omitted)")
     silk.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
     silk.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
@@ -1455,7 +1455,7 @@ def main():
     silkp.add_argument("pattern", choices=["checker","wedges","bars_theta","bars_radial"], help="Pattern name")
     silkp.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
     silkp.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
-    silkp.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
+    silkp.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR","auto"], help="Profile to set safe track limits and RPM default")
     silkp.add_argument("--rpm", type=float, default=None, help="Drive RPM (default from profile; fallback 300 if omitted)")
     silkp.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
     silkp.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
@@ -1467,7 +1467,7 @@ def main():
     silkp.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default 0.5)")
     silkp.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to write per track (default: 1)")
     silkp.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
-    silkp.add_argument("--allow-extended", action="store_true", dest="allow_extended", help="Allow tracks beyond safe profile limit (not recommended)")
+    silkp.add_argument("--allow-extended", action="store_true", dest="allow_extended", default=True, help="Allow tracks beyond safe profile limit (default: enabled)")
     silkp.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     silkp.add_argument("--disk-name", dest="disk_name", help="Disk name label for output subfolder (default: pattern name)")
     # Pattern-specific controls
@@ -1504,8 +1504,8 @@ def main():
                 save_polar_png(polar, str(out_dir / 'pattern.png'))
             except Exception:
                 pass
-            # Default disk name from pattern name if not provided
-            disk_name = args.disk_name or f"{args.pattern}"
+            # Default disk name uses pattern and profile when available
+            disk_name = args.disk_name or (f"{args.pattern}_{profile}" if profile else f"{args.pattern}")
             effective_rpm = _resolve_rpm(profile, getattr(args, 'rpm', None), context="silkscreen_pattern generation")
             manifest = generate_silkscreen(
                 image_path=None,
@@ -1581,7 +1581,7 @@ def main():
     analyze_disk_parser.add_argument("--track", type=int, help="Manual track number if not parsable from filename")
     analyze_disk_parser.add_argument("--side", type=int, choices=[0, 1], help="Manual side number if not parsable from filename")
     analyze_disk_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization/validation")
-    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Drive/media profile (GCR variants auto-select GCR overlays)")
+    analyze_disk_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR","auto"], help="Drive/media profile (GCR variants auto-select GCR overlays)")
     analyze_disk_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")
     analyze_disk_parser.add_argument("--lm-model", default="local-model", help="LM model name")
     analyze_disk_parser.add_argument("--lm-temperature", type=float, default=0.2, dest="lm_temperature", help="Temperature for LLM summary")
@@ -1624,7 +1624,7 @@ def main():
     corpus_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     corpus_parser.add_argument("--generate-missing", action="store_true", dest="generate_missing", help="Generate missing surface maps before aggregating")
     corpus_parser.add_argument("--rpm", type=float, help="Drive RPM for normalization when generating missing maps")
-    corpus_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Drive profile (sets RPM if --rpm not specified; GCR variants auto-select GCR overlays)")
+    corpus_parser.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR","auto"], help="Drive profile (sets RPM if --rpm not specified; GCR variants auto-select GCR overlays)")
     corpus_parser.add_argument("--media-type", choices=["35HD","35DD","525HD","525DD"], dest="media_type", help="Override media type for generated runs")
     corpus_parser.add_argument("--summarize", action="store_true", help="Generate LLM-powered corpus summary report")
     corpus_parser.add_argument("--lm-host", default="localhost:1234", help="LM Studio host (IP or host:port)")

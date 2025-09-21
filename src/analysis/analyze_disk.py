@@ -104,6 +104,7 @@ def run(args):
             'input_path': str(input_path),
             'effective_rpm': effective_rpm,
             'media_type': getattr(args, 'media_type', None),
+            'profile': profile,
             'analysis_timestamp': datetime.datetime.now().isoformat(),
             'insights': {
                 'overlay': {}
@@ -219,7 +220,10 @@ def run(args):
                 continue
 
             # Perform analysis using effective angular bins
-            analysis = analyzer.analyze(effective_ang_bins if effective_ang_bins > 0 else None)
+            analysis = analyzer.analyze(
+                effective_ang_bins if effective_ang_bins > 0 else None,
+                profile_name=profile
+            )
 
             # Per-file plots disabled by default to reduce output volume and speed up runs.
             # If needed, we can gate this behind a CLI flag in the future.

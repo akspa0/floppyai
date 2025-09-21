@@ -2,6 +2,7 @@ import struct
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from profiles_loader import get as get_profile, analyzer_params as _profile_analyzer_params
 
 class FluxAnalyzer:
     """
@@ -341,6 +342,7 @@ class FluxAnalyzer:
         interval_hist_bins: int | None = 96,
         interval_hist_min_ns: float = 150.0,
         interval_hist_max_ns: float = 60000.0,
+        profile_name: str | None = None,
     ):
         """
         Analyze flux data for noise, anomalies, weak bits.
@@ -356,14 +358,34 @@ class FluxAnalyzer:
         
         mean = self.stats.get('mean_interval_ns', 0)
         std = self.stats.get('std_interval_ns', 0)
+
+        # Profile-driven parameters (fallback to defaults when not provided)
+        prof = get_profile(profile_name) if profile_name else None
+        p = _profile_analyzer_params(prof)
+        base_cell = float(p.get('base_cell_ns', 4000.0))
+        short_cell_multiple = float(p.get('short_cell_multiple', 0.5))
+        long_interval_sigma = float(p.get('long_interval_sigma', 3.0))
+        weak_lo, weak_hi = tuple(p.get('weak_window_multiples', (1.5, 2.5)))
+        # If profile provides histogram range, prefer it over defaults passed in
+        try:
+            if p.get('interval_hist_min_ns') is not None:
+                interval_hist_min_ns = float(p['interval_hist_min_ns'])
+            if p.get('interval_hist_max_ns') is not None:
+                interval_hist_max_ns = float(p['interval_hist_max_ns'])
+        except Exception:
+            pass
         
-        # Detect anomalies: intervals >3*std (potential dropouts), <0.5*mean (short cells)
-        # For blanks, expect ~2000-4000ns cells; adjust thresholds
-        base_cell = 4000  # Typical MFM cell ns
+        # Detect anomalies using profile-aware thresholds
+        short_thr = (short_cell_multiple * base_cell) if base_cell > 0 else (0.5 * mean)
+        if mean > 0:
+            short_thr = min(short_thr, 0.5 * mean) if short_thr > 0 else 0.5 * mean
+        long_thr = (mean + long_interval_sigma * std) if std > 0 else 0
+        weak_lo_ns = weak_lo * base_cell
+        weak_hi_ns = weak_hi * base_cell
         anomalies = {
-            'short_cells': np.where(self.flux_data < 0.5 * mean)[0] if mean > 0 else [],
-            'long_intervals': np.where(self.flux_data > mean + 3 * std)[0] if std > 0 else [],
-            'weak_bit_candidates': np.where((self.flux_data > base_cell * 1.5) & (self.flux_data < base_cell * 2))[0]  # Potential weak (variable length)
+            'short_cells': np.where(self.flux_data < short_thr)[0] if short_thr > 0 else [],
+            'long_intervals': np.where(self.flux_data > long_thr)[0] if long_thr > 0 else [],
+            'weak_bit_candidates': np.where((self.flux_data > weak_lo_ns) & (self.flux_data < weak_hi_ns))[0]
         }
         
         # Simple noise profile: Variance per revolution
