@@ -1,0 +1,19 @@
+{
+  "name": "525HD",
+  "media": "525",
+  "encoding": "MFM",
+  "rpm": 360.0,
+  "safe_max_tracks": 81,
+  "base_cell_ns": 2000.0,
+  "analyzer": {
+    "short_cell_multiple": 0.5,
+    "long_interval_sigma": 3.0,
+    "weak_window_multiples": [1.5, 2.5],
+    "interval_hist_min_ns": 150.0,
+    "interval_hist_max_ns": 60000.0
+  },
+  "overlays": {
+    "mode": "mfm",
+    "mfm_candidates": [8, 9, 15, 18]
+  }
+}

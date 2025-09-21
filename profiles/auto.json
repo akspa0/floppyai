@@ -1,0 +1,20 @@
+{
+  "name": "auto",
+  "media": "auto",
+  "encoding": "auto",
+  "rpm": 300.0,
+  "safe_max_tracks": 81,
+  "base_cell_ns": 3500.0,
+  "analyzer": {
+    "short_cell_multiple": 0.5,
+    "long_interval_sigma": 3.0,
+    "weak_window_multiples": [1.5, 2.5],
+    "interval_hist_min_ns": 150.0,
+    "interval_hist_max_ns": 60000.0
+  },
+  "overlays": {
+    "mode": "auto",
+    "mfm_candidates": [8, 9, 15, 18],
+    "gcr_candidates": [12, 11, 10, 9, 8]
+  }
+}
