@@ -162,6 +162,33 @@ def _profile_safe_max(profile: str | None) -> int:
         return 81
     return 80
 
+def _resolve_rpm(profile: str | None, rpm_arg: float | None, context: str = "") -> float:
+    """Resolve an effective RPM from profile or explicit rpm.
+    If neither provided, default to 300.0 and print a helpful warning once per call site.
+    """
+    # Map of common profiles to RPM
+    rpm_profile_map = {
+        '35HD': 300.0,
+        '35DD': 300.0,
+        '35HDGCR': 300.0,
+        '35DDGCR': 300.0,
+        '525HD': 360.0,
+        '525DD': 300.0,
+        '525DDGCR': 300.0,
+    }
+    if rpm_arg is not None:
+        return float(rpm_arg)
+    if profile in rpm_profile_map:
+        return rpm_profile_map[profile]
+    # Fallback default with warning
+    try:
+        msg_ctx = f" for {context}" if context else ""
+        print(f"[Warning] No profile or RPM provided{msg_ctx}; defaulting to RPM=300.0. "
+              f"Pass --profile or --rpm to override.")
+    except Exception:
+        pass
+    return 300.0
+
 def _parse_tracks(tracks_arg: str | None, default_max: int) -> list[int]:
     if not tracks_arg:
         return list(range(0, default_max + 1))
@@ -1380,7 +1407,7 @@ def main():
     silk.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
     silk.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
     silk.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
-    silk.add_argument("--rpm", type=float, default=300.0, help="Drive RPM (default 300 for 3.5-inch)")
+    silk.add_argument("--rpm", type=float, default=None, help="Drive RPM (default from profile; fallback 300 if omitted)")
     silk.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
     silk.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
     silk.add_argument("--min-interval-ns", type=int, default=2000, dest="min_interval_ns", help="Minimum interval ns (default: 2000)")
@@ -1415,13 +1442,14 @@ def main():
             except Exception:
                 image_stem = "disk"
             disk_name = args.disk_name or image_stem
+            effective_rpm = _resolve_rpm(profile, getattr(args, 'rpm', None), context="silkscreen generation")
             manifest = generate_silkscreen(
                 image_path=args.image,
                 tracks=tracks,
                 side=args.side,
                 output_dir=str(out_dir),
                 angular_bins=args.angular_bins,
-                rpm=float(args.rpm),
+                rpm=effective_rpm,
                 avg_interval_ns=args.avg_interval_ns,
                 min_interval_ns=args.min_interval_ns,
                 max_interval_ns=args.max_interval_ns,
@@ -1453,7 +1481,7 @@ def main():
     silkp.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
     silkp.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
     silkp.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
-    silkp.add_argument("--rpm", type=float, default=300.0, help="Drive RPM (default 300 for 3.5-inch)")
+    silkp.add_argument("--rpm", type=float, default=None, help="Drive RPM (default from profile; fallback 300 if omitted)")
     silkp.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
     silkp.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
     silkp.add_argument("--min-interval-ns", type=int, default=2000, dest="min_interval_ns", help="Minimum interval ns (default: 2000)")
@@ -1503,13 +1531,14 @@ def main():
                 pass
             # Default disk name from pattern name if not provided
             disk_name = args.disk_name or f"{args.pattern}"
+            effective_rpm = _resolve_rpm(profile, getattr(args, 'rpm', None), context="silkscreen_pattern generation")
             manifest = generate_silkscreen(
                 image_path=None,
                 tracks=tracks,
                 side=args.side,
                 output_dir=str(out_dir),
                 angular_bins=args.angular_bins,
-                rpm=float(args.rpm),
+                rpm=effective_rpm,
                 avg_interval_ns=args.avg_interval_ns,
                 min_interval_ns=args.min_interval_ns,
                 max_interval_ns=args.max_interval_ns,
@@ -1600,7 +1629,19 @@ def main():
     analyze_disk_parser.add_argument("--render-dpi", type=int, dest="render_dpi", help="Override figure save DPI")
     analyze_disk_parser.add_argument("--align-to-sectors", choices=["off","side","track","auto"], default="off", dest="align_to_sectors", help="Rotate polar plots so sector 0° aligns to detected boundary (default: off; auto = side)")
     analyze_disk_parser.add_argument("--label-sectors", action="store_true", dest="label_sectors", help="Annotate sector numbers on polar plots when wedge count is known")
-    analyze_disk_parser.set_defaults(func=(analyze_disk_cmd if analyze_disk_cmd else lambda _args: (print("analyze_disk not available"), 1)[1]))
+    def _run_analyze_disk_with_warning(args):
+        # Ensure sensible RPM if neither profile nor rpm provided
+        try:
+            prof = getattr(args, 'profile', None)
+        except Exception:
+            prof = None
+        rpm_eff = getattr(args, 'rpm', None)
+        if rpm_eff is None and prof is None:
+            # Default to 300 with warning for normalization/validation
+            args.rpm = _resolve_rpm(None, None, context="analyze_disk")
+        return (analyze_disk_cmd(args) if analyze_disk_cmd else (print("analyze_disk not available"), 1)[1])
+
+    analyze_disk_parser.set_defaults(func=_run_analyze_disk_with_warning)
 
     # Analyze Corpus
     corpus_parser = subparsers.add_parser("analyze_corpus", help="Aggregate multiple surface_map.json files for a corpus summary")

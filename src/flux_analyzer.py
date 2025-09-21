@@ -220,6 +220,10 @@ class FluxAnalyzer:
                 self._decoder_sck_hz = sck_hz
                 self._decoder_oob_index_count = oob_index_count
                 self._decoder_total_samples = total_samples
+                try:
+                    print(f"Detected sck={sck_hz} Hz (C2/OOB) for {raw_path}")
+                except Exception:
+                    pass
 
                 # Fallback: if C2 decode yielded no samples, try legacy 32-bit LE parse
                 if self.flux_data.size == 0:
@@ -314,7 +318,7 @@ class FluxAnalyzer:
                 version = 'unknown'
         flags = 0
 
-        return {
+        result = {
             'fluxes': self.flux_data,
             'index_positions': self.index_positions,
             'revolutions': self.revolutions,
@@ -323,6 +327,13 @@ class FluxAnalyzer:
             'flags': flags,
             'header_text': header_text,
         }
+        # Surface convenience: include sck_hz if known
+        if hasattr(self, '_decoder_sck_hz'):
+            try:
+                result['sck_hz'] = float(self._decoder_sck_hz)
+            except Exception:
+                result['sck_hz'] = self._decoder_sck_hz
+        return result
 
     def analyze(
         self,

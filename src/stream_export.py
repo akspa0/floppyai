@@ -29,7 +29,16 @@ def write_internal_raw(flux_intervals: List[int], track: int, side: int, output_
         f.write(arr.tobytes(order='C'))
 
 
-def write_kryoflux_stream(flux_intervals: List[int], track: int, side: int, output_path: str, num_revs: int = 1, version: str = '3.50', rpm: float = 360.0) -> None:
+def write_kryoflux_stream(
+    flux_intervals: List[int],
+    track: int,
+    side: int,
+    output_path: str,
+    num_revs: int = 1,
+    version: str = '3.50',
+    rpm: float | None = None,
+    sck_hz: float = 24027428.5714285,
+) -> None:
     """
     Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
     Layout:
@@ -44,9 +53,6 @@ def write_kryoflux_stream(flux_intervals: List[int], track: int, side: int, outp
     """
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-
-    # Sample clock (Hz) used by KryoFlux
-    sck_hz = 24027428.5714285
 
     def ns_to_ticks(ns_val: int | float) -> int:
         return max(0, int(round((float(ns_val) * sck_hz) / 1e9)))
@@ -112,3 +118,7 @@ def write_kryoflux_stream(flux_intervals: List[int], track: int, side: int, outp
 
     with open(p, 'wb') as f:
         f.write(stream)
+    try:
+        print(f"Wrote KryoFlux C2 stream: track={track} side={side} sck={sck_hz} Hz -> {p}")
+    except Exception:
+        pass
