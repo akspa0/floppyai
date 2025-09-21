@@ -1,6 +1,7 @@
 import struct
 from pathlib import Path
 from typing import List
+import numpy as np
 
 # Constants for revolution times (ns)
 REV_TIME_NS_300 = 200_000_000  # ~200ms (300 RPM)
@@ -24,41 +25,90 @@ def write_internal_raw(flux_intervals: List[int], track: int, side: int, output_
         f.write(b'FLUX')
         f.write(struct.pack('<I', count))
         f.write(struct.pack('<I', int(num_revs)))
-        for iv in flux_intervals:
-            f.write(struct.pack('<I', int(iv)))
+        arr = np.asarray(flux_intervals, dtype=np.uint32)
+        f.write(arr.tobytes(order='C'))
 
 
-def write_kryoflux_stream(flux_intervals: List[int], track: int, side: int, output_path: str, num_revs: int = 1, version: str = '3.00s', rpm: float = 360.0) -> None:
+def write_kryoflux_stream(flux_intervals: List[int], track: int, side: int, output_path: str, num_revs: int = 1, version: str = '3.50', rpm: float = 360.0) -> None:
     """
-    Write a pseudo-KryoFlux stream that many tools can ingest. This is not guaranteed
-    to satisfy every dtc version but serves as a starting point for hardware trials.
-    Strategy:
-      - ASCII metadata header (null-terminated) with track/side and nominal clocks
-      - Sequence of uint32 intervals with an index marker (0xFFFFFFFF) after each rev
-    Notes:
-      - We will iterate based on dtc logs from the Linux host if needed.
+    Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
+    Layout:
+      - OOB info block with ASCII text including 'KryoFlux' and sck=
+      - Encoded sample stream (C2) of tick counts converted from ns
+      - OOB index (type=2) after each revolution
+      - OOB stream end (type=3)
+    Encoding rules (aligned to our parser in flux_analyzer.py):
+      - small sample: 0x00, then 1 byte 0..0x0D for 0..13 ticks
+      - single byte sample: 0x0E..0xFF for 14..255 ticks
+      - overflow: repeat 0x0B to add 65536 per occurrence, then 0x0C + uint16 LE sample for remaining 0..65535
     """
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build metadata header
-    metadata = (
-        f"host_date=2025.09.20, host_time=00:00:00, hc=0, name=KryoFlux DiskSystem, "
-        f"version={version}, date=Sep 20 2025, time=00:00:00, hwvid=1, hwrv=1, hs=0, "
-        f"sck=24027428.5714285, ick=3003428.57142857, track={track}, side={side}\x00"
-    ).encode('ascii')
+    # Sample clock (Hz) used by KryoFlux
+    sck_hz = 24027428.5714285
 
-    # Write header + flux with index pulses
+    def ns_to_ticks(ns_val: int | float) -> int:
+        return max(0, int(round((float(ns_val) * sck_hz) / 1e9)))
+
+    def encode_ticks(ticks: int) -> bytes:
+        # Use C2 sample encoding compatible with our parser
+        if ticks <= 13:
+            return bytes((0x00, ticks & 0xFF))
+        if ticks <= 0xFF:
+            return bytes((ticks & 0xFF,))
+        # Larger than one byte: use overflow blocks and a final 16-bit sample
+        parts = bytearray()
+        if ticks > 0xFFFF:
+            overflow = ticks // 65536
+            ticks = ticks % 65536
+            parts.extend(b"\x0B" * int(overflow))  # c2eOverflow16
+        parts.append(0x0C)  # c2eValue16
+        parts.append(ticks & 0xFF)
+        parts.append((ticks >> 8) & 0xFF)
+        return bytes(parts)
+
+    def oob_block(typ: int, payload: bytes = b"") -> bytes:
+        # 0x0D, type, size (LE 16), payload
+        sz = len(payload)
+        return bytes((0x0D, typ, sz & 0xFF, (sz >> 8) & 0xFF)) + payload
+
+    # Prepare intervals and per-rev splitting
+    if num_revs <= 0:
+        num_revs = 1
+    intervals = np.asarray(flux_intervals, dtype=np.uint64)
+    n = int(intervals.size)
+    if num_revs == 1:
+        splits = [n]
+    else:
+        base = n // num_revs
+        rem = n % num_revs
+        splits = [base] * num_revs
+        if rem:
+            splits[-1] += rem
+
+    # Build stream
+    stream = bytearray()
+    info_txt = f"KryoFlux DiskSystem, sck={sck_hz}, track={track}, side={side}"
+    stream.extend(oob_block(4, info_txt.encode('ascii')))
+
+    pos = 0
+    for i, cnt in enumerate(splits):
+        if cnt <= 0:
+            # Still write an index for an empty revolution
+            stream.extend(oob_block(2))
+            continue
+        rev = intervals[pos:pos+cnt]
+        pos += cnt
+        # Encode each ns interval into C2 ticks
+        for ns_val in rev:
+            t = ns_to_ticks(int(ns_val))
+            stream.extend(encode_ticks(t))
+        # OOB index marker
+        stream.extend(oob_block(2))
+
+    # OOB stream end
+    stream.extend(oob_block(3))
+
     with open(p, 'wb') as f:
-        f.write(metadata)
-        if num_revs <= 0:
-            num_revs = 1
-        per_rev = max(1, len(flux_intervals) // num_revs)
-        pos = 0
-        for _ in range(num_revs):
-            rev_intervals = flux_intervals[pos:pos + per_rev]
-            for iv in rev_intervals:
-                f.write(struct.pack('<I', int(iv)))
-            # Index marker
-            f.write(struct.pack('<I', 0xFFFFFFFF))
-            pos += per_rev
+        f.write(stream)

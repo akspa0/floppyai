@@ -1,47 +1,3 @@
-    # Image → Flux (round-trip experiments)
-    img2flux = subparsers.add_parser("image2flux", help="Generate a .raw flux stream from an image for round-trip experiments")
-    img2flux.add_argument("image", help="Path to input image (grayscale or color)")
-    img2flux.add_argument("track", type=int, help="Track number (for naming/metadata)")
-    img2flux.add_argument("side", type=int, choices=[0, 1], help="Side (for naming/metadata)")
-    img2flux.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to emit (default: 1)")
-    img2flux.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for mapping the image row (default: 720)")
-    img2flux.add_argument("--on-count", type=int, default=4, dest="on_count", help="Transitions per ON bin (default: 4)")
-    img2flux.add_argument("--off-count", type=int, default=1, dest="off_count", help="Transitions per OFF bin (default: 1)")
-    img2flux.add_argument("--interval-ns", type=int, default=2000, dest="interval_ns", help="Interval length per transition in ns (default: 2000)")
-    img2flux.add_argument("--rpm", type=float, default=300.0, help="Nominal RPM for metadata when writing KryoFlux-like streams (default: 300)")
-    img2flux.add_argument("--dither", choices=["none","ordered","floyd"], default="none", help="Dithering for binarization (default: none)")
-    img2flux.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default: 0.5)")
-    img2flux.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
-    img2flux.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
-
-    def _run_image2flux(args):
-        run_dir = get_output_dir(args.output_dir)
-        base = Path(args.image).stem
-        out = str(run_dir / f"image2flux_{base}_t{args.track}_s{args.side}.raw")
-        try:
-            path, n = generate_from_image(
-                image_path=args.image,
-                track=args.track,
-                side=args.side,
-                output_path=out,
-                revolutions=args.revolutions,
-                angular_bins=args.angular_bins,
-                on_count=args.on_count,
-                off_count=args.off_count,
-                interval_ns=args.interval_ns,
-                output_format=args.output_format,
-                rpm=args.rpm,
-                dither=args.dither,
-                threshold=args.threshold,
-            )
-            print(f"Image→flux generated: {path} (intervals={n})")
-            print("Next: transfer to Linux DTC host to write/read; then analyze here.")
-        except Exception as e:
-            print(f"image2flux failed: {e}")
-            return 1
-        return 0
-
-    img2flux.set_defaults(func=_run_image2flux)
 #!/usr/bin/env python3
 import datetime
 import os
@@ -84,6 +40,9 @@ from cmd_stream_ops import (
 from patterns import generate_pattern
 from stream_export import write_internal_raw, write_kryoflux_stream
 from encoding.image2flux import generate_from_image
+from encoding.silkscreen import generate_silkscreen
+from analysis.structure_finder import recover_image as recover_image_func
+from encoding.pattern_images import generate_polar_pattern, save_polar_png
 try:
     from cmd_experiments import run_experiment_matrix as run_experiment_matrix_cmd
 except ImportError:
@@ -1369,6 +1328,248 @@ def main():
     decode_parser.add_argument("--expected", help="Optional expected binary to compare against")
     decode_parser.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
     decode_parser.set_defaults(func=decode_data)
+
+    # Image → Flux (round-trip experiments)
+    img2flux = subparsers.add_parser("image2flux", help="Generate a .raw flux stream from an image for round-trip experiments")
+    img2flux.add_argument("image", help="Path to input image (grayscale or color)")
+    img2flux.add_argument("track", type=int, help="Track number (for naming/metadata)")
+    img2flux.add_argument("side", type=int, choices=[0, 1], help="Side (for naming/metadata)")
+    img2flux.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to emit (default: 1)")
+    img2flux.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for mapping the image row (default: 720)")
+    img2flux.add_argument("--on-count", type=int, default=4, dest="on_count", help="Transitions per ON bin (default: 4)")
+    img2flux.add_argument("--off-count", type=int, default=1, dest="off_count", help="Transitions per OFF bin (default: 1)")
+    img2flux.add_argument("--interval-ns", type=int, default=2000, dest="interval_ns", help="Interval length per transition in ns (default: 2000)")
+    img2flux.add_argument("--rpm", type=float, default=300.0, help="Nominal RPM for metadata when writing KryoFlux-like streams (default: 300)")
+    img2flux.add_argument("--dither", choices=["none","ordered","floyd"], default="none", help="Dithering for binarization (default: none)")
+    img2flux.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default: 0.5)")
+    img2flux.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    img2flux.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+
+    def _run_image2flux(args):
+        run_dir = get_output_dir(args.output_dir)
+        base = Path(args.image).stem
+        out = str(run_dir / f"image2flux_{base}_t{args.track}_s{args.side}.raw")
+        try:
+            path, n = generate_from_image(
+                image_path=args.image,
+                track=args.track,
+                side=args.side,
+                output_path=out,
+                revolutions=args.revolutions,
+                angular_bins=args.angular_bins,
+                on_count=args.on_count,
+                off_count=args.off_count,
+                interval_ns=args.interval_ns,
+                output_format=args.output_format,
+                rpm=args.rpm,
+                dither=args.dither,
+                threshold=args.threshold,
+            )
+            print(f"Image→flux generated: {path} (intervals={n})")
+            print("Next: transfer to Linux DTC host to write/read; then analyze here.")
+        except Exception as e:
+            print(f"image2flux failed: {e}")
+            return 1
+        return 0
+
+    img2flux.set_defaults(func=_run_image2flux)
+
+    # Silkscreen: map an image across tracks and angle (per-track .raws)
+    silk = subparsers.add_parser("silkscreen", help="Silkscreen an image onto a disk side as per-track .raw streams")
+    silk.add_argument("image", help="Path to input image (any resolution)")
+    silk.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
+    silk.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
+    silk.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
+    silk.add_argument("--rpm", type=float, default=300.0, help="Drive RPM (default 300 for 3.5-inch)")
+    silk.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
+    silk.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
+    silk.add_argument("--min-interval-ns", type=int, default=2000, dest="min_interval_ns", help="Minimum interval ns (default: 2000)")
+    silk.add_argument("--max-interval-ns", type=int, default=8000, dest="max_interval_ns", help="Maximum interval ns (default: 8000)")
+    silk.add_argument("--on-count-max", type=int, default=6, dest="on_count_max", help="Max transitions for darkest bins (default: 6)")
+    silk.add_argument("--off-count-min", type=int, default=1, dest="off_count_min", help="Min transitions for lightest bins (default: 1)")
+    silk.add_argument("--dither", choices=["none","ordered","floyd"], default="floyd", help="Dithering for θ (default: floyd)")
+    silk.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default 0.5)")
+    silk.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to write per track (default: 1)")
+    silk.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    silk.add_argument("--allow-extended", action="store_true", dest="allow_extended", help="Allow tracks beyond safe profile limit (not recommended)")
+    silk.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    silk.add_argument("--disk-name", dest="disk_name", help="Disk name label for output subfolder (default: image filename)")
+
+    def _run_silkscreen(args):
+        run_dir = get_output_dir(args.output_dir)
+        profile = getattr(args, 'profile', None)
+        safe_max = _profile_safe_max(profile)
+        tracks = _parse_tracks(getattr(args, 'tracks', None), safe_max)
+        # Enforce safe limits unless explicitly overridden
+        max_req = max(tracks) if tracks else 0
+        if not getattr(args, 'allow_extended', False) and max_req > safe_max:
+            print(f"Requested max track {max_req} exceeds safe limit {safe_max} for profile {profile or 'default'}.")
+            print("Pass --allow-extended to override (not recommended).")
+            return 2
+        out_dir = run_dir / 'silkscreen'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Default disk name from image stem if not provided
+            try:
+                image_stem = Path(args.image).stem
+            except Exception:
+                image_stem = "disk"
+            disk_name = args.disk_name or image_stem
+            manifest = generate_silkscreen(
+                image_path=args.image,
+                tracks=tracks,
+                side=args.side,
+                output_dir=str(out_dir),
+                angular_bins=args.angular_bins,
+                rpm=float(args.rpm),
+                avg_interval_ns=args.avg_interval_ns,
+                min_interval_ns=args.min_interval_ns,
+                max_interval_ns=args.max_interval_ns,
+                on_count_max=args.on_count_max,
+                off_count_min=args.off_count_min,
+                dither=args.dither,
+                threshold=args.threshold,
+                revolutions=args.revolutions,
+                output_format=args.output_format,
+                disk_name=disk_name,
+            )
+            mf_path = run_dir / 'silkscreen_manifest.json'
+            dump_json(mf_path, manifest)
+            print(f"Silkscreen set written under {out_dir} ({len(manifest.get('files', []))} files)")
+            gt_png = manifest.get('ground_truth_png')
+            if gt_png:
+                print(f"Ground truth (polar) saved to: {gt_png}")
+            print("Next: transfer to Linux DTC host to write/read per-track .raw, then analyze here.")
+        except Exception as e:
+            print(f"silkscreen failed: {e}")
+            return 1
+        return 0
+
+    silk.set_defaults(func=_run_silkscreen)
+
+    # Silkscreen from built-in patterns (no external image required)
+    silkp = subparsers.add_parser("silkscreen_pattern", help="Generate per-track .raws by silkscreening a built-in pattern")
+    silkp.add_argument("pattern", choices=["checker","wedges","bars_theta","bars_radial"], help="Pattern name")
+    silkp.add_argument("--side", type=int, choices=[0,1], default=0, help="Side (default: 0)")
+    silkp.add_argument("--tracks", help="Track range 'a-b' or comma list (default: safe by profile)")
+    silkp.add_argument("--profile", choices=["35HD","35DD","35HDGCR","35DDGCR","525HD","525DD","525DDGCR"], help="Profile to set safe track limits and RPM default")
+    silkp.add_argument("--rpm", type=float, default=300.0, help="Drive RPM (default 300 for 3.5-inch)")
+    silkp.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for θ (default: 720)")
+    silkp.add_argument("--avg-interval-ns", type=int, default=2200, dest="avg_interval_ns", help="Target average interval per transition in ns (default: 2200)")
+    silkp.add_argument("--min-interval-ns", type=int, default=2000, dest="min_interval_ns", help="Minimum interval ns (default: 2000)")
+    silkp.add_argument("--max-interval-ns", type=int, default=8000, dest="max_interval_ns", help="Maximum interval ns (default: 8000)")
+    silkp.add_argument("--on-count-max", type=int, default=6, dest="on_count_max", help="Max transitions for darkest bins (default: 6)")
+    silkp.add_argument("--off-count-min", type=int, default=1, dest="off_count_min", help="Min transitions for lightest bins (default: 1)")
+    silkp.add_argument("--dither", choices=["none","ordered","floyd"], default="floyd", help="Dithering for θ (default: floyd)")
+    silkp.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default 0.5)")
+    silkp.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to write per track (default: 1)")
+    silkp.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    silkp.add_argument("--allow-extended", action="store_true", dest="allow_extended", help="Allow tracks beyond safe profile limit (not recommended)")
+    silkp.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+    silkp.add_argument("--disk-name", dest="disk_name", help="Disk name label for output subfolder (default: pattern name)")
+    # Pattern-specific controls
+    silkp.add_argument("--k", type=int, default=12, help="Wedges: number of sectors (default: 12)")
+    silkp.add_argument("--duty", type=float, default=0.5, help="Duty cycle for bars/wedges (0-1, default: 0.5)")
+    silkp.add_argument("--theta-period", type=int, default=36, dest="theta_period", help="Theta bars/checker period in bins (default: 36)")
+    silkp.add_argument("--radial-period", type=int, default=8, dest="radial_period", help="Radial bars/checker period in bins (default: 8)")
+
+    def _run_silkscreen_pattern(args):
+        run_dir = get_output_dir(args.output_dir)
+        profile = getattr(args, 'profile', None)
+        safe_max = _profile_safe_max(profile)
+        tracks = _parse_tracks(getattr(args, 'tracks', None), safe_max)
+        max_req = max(tracks) if tracks else 0
+        if not getattr(args, 'allow_extended', False) and max_req > safe_max:
+            print(f"Requested max track {max_req} exceeds safe limit {safe_max} for profile {profile or 'default'}.")
+            print("Pass --allow-extended to override (not recommended).")
+            return 2
+        out_dir = run_dir / 'silkscreen_pattern'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            radial_bins = len(tracks)
+            polar = generate_polar_pattern(
+                name=args.pattern,
+                angular_bins=int(args.angular_bins),
+                radial_bins=int(radial_bins),
+                k=int(getattr(args, 'k', 12)),
+                duty=float(getattr(args, 'duty', 0.5)),
+                theta_period=int(getattr(args, 'theta_period', 36)),
+                radial_period=int(getattr(args, 'radial_period', 8)),
+            )
+            # Save the intended pattern for convenience
+            try:
+                save_polar_png(polar, str(out_dir / 'pattern.png'))
+            except Exception:
+                pass
+            # Default disk name from pattern name if not provided
+            disk_name = args.disk_name or f"{args.pattern}"
+            manifest = generate_silkscreen(
+                image_path=None,
+                tracks=tracks,
+                side=args.side,
+                output_dir=str(out_dir),
+                angular_bins=args.angular_bins,
+                rpm=float(args.rpm),
+                avg_interval_ns=args.avg_interval_ns,
+                min_interval_ns=args.min_interval_ns,
+                max_interval_ns=args.max_interval_ns,
+                on_count_max=args.on_count_max,
+                off_count_min=args.off_count_min,
+                dither=args.dither,
+                threshold=args.threshold,
+                revolutions=args.revolutions,
+                output_format=args.output_format,
+                polar_override=polar,
+                disk_name=disk_name,
+            )
+            from utils.json_io import dump_json as _dump
+            _dump(out_dir / 'silkscreen_pattern_manifest.json', manifest)
+            print(f"Silkscreen pattern '{args.pattern}' written under {out_dir} ({len(manifest.get('files', []))} files)")
+            print("Next: transfer to Linux DTC host to write/read per-track .raw, then analyze here.")
+        except Exception as e:
+            print(f"silkscreen_pattern failed: {e}")
+            return 1
+        return 0
+
+    silkp.set_defaults(func=_run_silkscreen_pattern)
+
+    # Recover image: reconstruct polar image from surface_map.json and compare with expected
+    rec = subparsers.add_parser("recover_image", help="Reconstruct a polar (track×angle) image from surface_map.json")
+    rec.add_argument("input", help="Path to surface_map.json")
+    rec.add_argument("--side", type=int, choices=[0,1], default=0, help="Side to recover (default: 0)")
+    rec.add_argument("--tracks", help="Track range 'a-b' or comma list (default: all present)")
+    rec.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for reconstruction (default: 720)")
+    rec.add_argument("--expected", help="Optional expected polar image (PNG) to compare against")
+    rec.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+
+    def _run_recover(args):
+        run_dir = get_output_dir(args.output_dir)
+        out_dir = run_dir / 'recover'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Tracks: if provided, parse; else None to auto-select from surface_map
+        profile = None
+        safe_max = _profile_safe_max(profile)
+        tracks = None
+        if getattr(args, 'tracks', None):
+            tracks = _parse_tracks(args.tracks, safe_max)
+        try:
+            man = recover_image_func(
+                surface_map_path=args.input,
+                output_dir=str(out_dir),
+                side=int(args.side),
+                tracks=tracks,
+                angular_bins=int(args.angular_bins),
+                expected=args.expected,
+            )
+            from utils.json_io import dump_json as _dump
+            _dump(out_dir / 'recover_manifest.json', man)
+            print(f"Recovered polar image saved to {man.get('recovered_png')}\nMetrics: {man.get('metrics')}")
+        except Exception as e:
+            print(f"recover_image failed: {e}")
+            return 1
+        return 0
+
+    rec.set_defaults(func=_run_recover)
 
     # Analyze Disk (delegates to analysis.analyze_disk.run if available)
     analyze_disk_parser = subparsers.add_parser("analyze_disk", help="Batch analyze .raw streams for disk surface map")

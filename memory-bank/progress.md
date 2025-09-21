@@ -1,6 +1,6 @@
 # Progress — FloppyAI
 
-Last updated: 2025-09-21 01:01 (local)
+Last updated: 2025-09-21 02:02 (local)
 
 ## What Works
 - Modular CLI wiring: `cmd_stream_ops.py`, `cmd_corpus.py`, `cmd_diff.py` integrated into `main.py`.
@@ -19,6 +19,8 @@ Last updated: 2025-09-21 01:01 (local)
   - `--overlay-mode` defaults to `auto`; analyzer picks from profile.
   - GCR candidates auto‑selected by profile; still overridable.
 - Docs updated: README and `docs/usage.md` reflect simplified commands and brighter instability visuals.
+ - New concept page `docs/instability.md` created; cheatsheet updated with an instability quick reference.
+ - New CLI `image2flux` subcommand scaffolding added (angular‑only MVP) in `src/encoding/image2flux.py` and wired in `main.py`.
 
 ## What's Left
 - Phase 2: finish migrating leftover `json.dump` sites to `utils.json_io.dump_json` (verify all in `main.py` and commands).
@@ -29,6 +31,8 @@ Last updated: 2025-09-21 01:01 (local)
 - Optional: add `--overlay-fill` to softly shade sectors for visibility.
 - Continue Phase 2 cleanup: ensure all JSON writes use `utils.json_io.dump_json`.
 - Validate overlay heuristics across more datasets (MFM and GCR; zoned tracks) and tune defaults if needed.
+ - Implement `structure_finder` (pattern reconstruction) and integrate round‑trip metrics (correlation, phase), add end‑to‑end tutorial assets.
+ - Add Linux write/read script in `scripts/linux/` and document exact flags and safety notes.
 
 ## Current Status
 - Phase 1: completed.

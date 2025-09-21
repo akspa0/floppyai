@@ -1,10 +1,11 @@
 # Active Context — FloppyAI
 
-Last updated: 2025-09-21 01:01 (local)
+Last updated: 2025-09-21 02:02 (local)
 
 ## Current Focus
 - Visualization and overlay fidelity on full-disk runs.
 - Reduce CLI friction with profile‑driven defaults (MFM vs GCR) while keeping forensic‑rich outputs concise.
+- New experiments initiative: image→flux round‑trip, write on Linux DTC host, read back, analyze, and reconstruct structures (structure finder) to validate visualization correctness.
 
 ## Recent Changes
 - Visualization fixes and enhancements:
@@ -19,8 +20,8 @@ Last updated: 2025-09-21 01:01 (local)
 
 ## Next Steps
 - Validate sector overlay results on representative MFM and GCR datasets; fine‑tune candidate lists per zone if needed.
-- Consider optional `--overlay-fill` (subtle wedge shading) to further emphasize sectors.
 - Extend experiments docs with guidance on forensic‑rich captures and multi‑read comparisons; keep per‑side composites to avoid PNG spam.
+- Implement `image2flux` MVP and `structure_finder` MVP; document Linux write/read script usage.
 - Continue Phase 2 cleanup (ensure all JSON writes use `utils.json_io.dump_json`).
 
 ## Open Decisions
