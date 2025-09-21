@@ -52,7 +52,7 @@ USAGE
 # Defaults
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="./captures"
+OUT_DIR="/srv/kryoflux/captures"
 LABEL="full-disk"
 USE_SUDO=1
 DRY_RUN=0
@@ -125,8 +125,8 @@ LOG_FILE="run.log"
 {
   echo "capture_forensic_full_disk.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"
-  "$DTC_BIN" -V 2>&1 || true
+  echo "dtc header:"
+  "$DTC_BIN" 2>&1 | head -n 4 || true
   echo
   echo "Profile: ${PROFILE}  Sides: ${SIDES}  Tracks: ${START_TRACK}..${END_TRACK} step ${STEP}  Revs: ${REVS}"
   echo "Cooldown: ${COOLDOWN}s  Spinup: ${SPINUP}s"
@@ -135,11 +135,11 @@ LOG_FILE="run.log"
 run_read() {
   local track=$1 side=$2
   # Run within RUN_DIR and use simple prefix 'track' so files are track%02d.%d.raw
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -p -s${track} -e${track} -g${side} -r${REVS} -ftrack"
   echo "[READ ] $cmd"
   echo "[READ ] $cmd" >> "$LOG_FILE"
   if [[ $DRY_RUN -eq 0 ]]; then
-    bash -lc "$cmd" | tee -a "$LOG_FILE"
+    eval "$cmd" | tee -a "$LOG_FILE"
   fi
 }
 
@@ -148,11 +148,37 @@ capture_side() {
   echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_FILE"
   sleep "$SPINUP"
   if (( STEP == 1 )); then
-    # Single dtc invocation across the whole track range for this side
-    local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -p -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
-    echo "[READ ] $cmd" | tee -a "$LOG_FILE"
+    # Single dtc invocation across the whole track range for this side with fallbacks
+    local cmd1="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -p -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+    echo "[READ ] $cmd1" | tee -a "$LOG_FILE"
     if [[ $DRY_RUN -eq 0 ]]; then
-      bash -lc "$cmd" | tee -a "$LOG_FILE"
+      eval "$cmd1" | tee -a "$LOG_FILE"
+    fi
+    shopt -s nullglob; files=(track*.raw)
+    if (( ${#files[@]} == 0 )); then
+      echo "WARN: No track*.raw found after first attempt; retrying without -p" | tee -a "$LOG_FILE"
+      local cmd2="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -m2 -l63 -i0 -t1 -k1 -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+      echo "[READ ] $cmd2" | tee -a "$LOG_FILE"
+      if [[ $DRY_RUN -eq 0 ]]; then
+        eval "$cmd2" | tee -a "$LOG_FILE"
+      fi
+      files=(track*.raw)
+    fi
+    if (( ${#files[@]} == 0 )); then
+      echo "WARN: Still no files; retrying without -m/-l toggles" | tee -a "$LOG_FILE"
+      local cmd3="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -t1 -k1 -s${START_TRACK} -e${END_TRACK} -g${side} -r${REVS} -ftrack"
+      echo "[READ ] $cmd3" | tee -a "$LOG_FILE"
+      if [[ $DRY_RUN -eq 0 ]]; then
+        eval "$cmd3" | tee -a "$LOG_FILE"
+      fi
+      files=(track*.raw)
+    fi
+    if (( ${#files[@]} == 0 )); then
+      echo "ERROR: No track*.raw files were written. Listing directory and environment:" | tee -a "$LOG_FILE"
+      pwd | tee -a "$LOG_FILE"
+      id -u | tee -a "$LOG_FILE"
+      ls -la | tee -a "$LOG_FILE"
+      echo "Hints: (1) Power-cycle/reset KryoFlux and drive. (2) Rerun with --dry-run to inspect commands. (3) Verify permissions in $PWD." | tee -a "$LOG_FILE"
     fi
   else
     # Fallback: per-track loop when a custom STEP is requested
