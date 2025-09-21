@@ -1,3 +1,47 @@
+    # Image → Flux (round-trip experiments)
+    img2flux = subparsers.add_parser("image2flux", help="Generate a .raw flux stream from an image for round-trip experiments")
+    img2flux.add_argument("image", help="Path to input image (grayscale or color)")
+    img2flux.add_argument("track", type=int, help="Track number (for naming/metadata)")
+    img2flux.add_argument("side", type=int, choices=[0, 1], help="Side (for naming/metadata)")
+    img2flux.add_argument("--revs", type=int, default=1, dest="revolutions", help="Revolutions to emit (default: 1)")
+    img2flux.add_argument("--angular-bins", type=int, default=720, dest="angular_bins", help="Angular bins for mapping the image row (default: 720)")
+    img2flux.add_argument("--on-count", type=int, default=4, dest="on_count", help="Transitions per ON bin (default: 4)")
+    img2flux.add_argument("--off-count", type=int, default=1, dest="off_count", help="Transitions per OFF bin (default: 1)")
+    img2flux.add_argument("--interval-ns", type=int, default=2000, dest="interval_ns", help="Interval length per transition in ns (default: 2000)")
+    img2flux.add_argument("--rpm", type=float, default=300.0, help="Nominal RPM for metadata when writing KryoFlux-like streams (default: 300)")
+    img2flux.add_argument("--dither", choices=["none","ordered","floyd"], default="none", help="Dithering for binarization (default: none)")
+    img2flux.add_argument("--threshold", type=float, default=0.5, help="Threshold for binarization (0..1; default: 0.5)")
+    img2flux.add_argument("--output-format", choices=["kryoflux","internal"], default="kryoflux", dest="output_format", help="Output format (default: kryoflux)")
+    img2flux.add_argument("--output-dir", help="Custom output directory (default: test_outputs/timestamp/)")
+
+    def _run_image2flux(args):
+        run_dir = get_output_dir(args.output_dir)
+        base = Path(args.image).stem
+        out = str(run_dir / f"image2flux_{base}_t{args.track}_s{args.side}.raw")
+        try:
+            path, n = generate_from_image(
+                image_path=args.image,
+                track=args.track,
+                side=args.side,
+                output_path=out,
+                revolutions=args.revolutions,
+                angular_bins=args.angular_bins,
+                on_count=args.on_count,
+                off_count=args.off_count,
+                interval_ns=args.interval_ns,
+                output_format=args.output_format,
+                rpm=args.rpm,
+                dither=args.dither,
+                threshold=args.threshold,
+            )
+            print(f"Image→flux generated: {path} (intervals={n})")
+            print("Next: transfer to Linux DTC host to write/read; then analyze here.")
+        except Exception as e:
+            print(f"image2flux failed: {e}")
+            return 1
+        return 0
+
+    img2flux.set_defaults(func=_run_image2flux)
 #!/usr/bin/env python3
 import datetime
 import os
@@ -39,6 +83,7 @@ from cmd_stream_ops import (
 )
 from patterns import generate_pattern
 from stream_export import write_internal_raw, write_kryoflux_stream
+from encoding.image2flux import generate_from_image
 try:
     from cmd_experiments import run_experiment_matrix as run_experiment_matrix_cmd
 except ImportError:
