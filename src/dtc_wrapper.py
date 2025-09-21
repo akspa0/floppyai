@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 import tempfile
+import struct
+import numpy as np
 
 class DTCWrapper:
     """

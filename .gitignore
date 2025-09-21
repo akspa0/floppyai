@@ -1,0 +1,5 @@
+## blah
+*.raw
+*.stream
+*__pycache__*
+*test_outputs\*
