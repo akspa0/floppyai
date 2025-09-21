@@ -21,6 +21,7 @@ from rendering import (
     render_instability_map,
     render_single_track_detail,
     render_side_report,
+    render_disk_dashboard,
 )
 from utils.json_io import dump_json
 
@@ -322,6 +323,12 @@ def run(args):
             for s in [0, 1]:
                 render_side_report(surface_map, instab_scores, s, base_name, args)
                 log(f"Saved side report for side {s}")
+            # Whole-disk dashboard
+            try:
+                render_disk_dashboard(surface_map, instab_scores, base_name, args)
+                log("Saved whole-disk dashboard")
+            except Exception as e_dash:
+                log(f"Warning: Dashboard rendering failed: {e_dash}")
         except Exception as e:
             log(f"Warning: Side report rendering failed: {e}")
 

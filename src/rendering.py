@@ -118,9 +118,26 @@ def render_disk_surface(sm: dict, out_prefix: Path, args) -> None:
         cbar.set_label('Bits per Revolution')
 
     plt.tight_layout()
-    outfile = Path(str(out_prefix) + "_disk_surface.png")
-    plt.savefig(str(outfile), dpi=220)
-    plt.close()
+    # Support export format (png|svg|both); default png
+    fmt = str(getattr(args, 'export_format', 'png') or 'png').lower()
+    base = Path(str(out_prefix) + "_disk_surface")
+    try:
+        if fmt in ('png', 'both'):
+            plt.savefig(str(base.with_suffix('.png')), dpi=220)
+        if fmt in ('svg', 'both'):
+            # Rasterize pcolormesh where possible
+            try:
+                for ax in [ax0, ax1]:
+                    for coll in ax.collections:
+                        try:
+                            coll.set_rasterized(True)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            plt.savefig(str(base.with_suffix('.svg')), dpi=220, format='svg')
+    finally:
+        plt.close()
 
 
 def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Path, args) -> None:
@@ -181,9 +198,15 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         ax.axis('off')
         ax.text(0.5, 0.5, f"Side {side}: no data", ha='center', va='center')
         plt.tight_layout()
-        outfile = Path(str(out_prefix) + f"_side{side}_report.png")
-        plt.savefig(str(outfile), dpi=180)
-        plt.close()
+        fmt = str(getattr(args, 'export_format', 'png') or 'png').lower()
+        base = Path(str(out_prefix) + f"_side{side}_report")
+        try:
+            if fmt in ('png', 'both'):
+                plt.savefig(str(base.with_suffix('.png')), dpi=180)
+            if fmt in ('svg', 'both'):
+                plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+        finally:
+            plt.close()
         return
 
     # Color scale from available densities
@@ -315,6 +338,11 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         for th in thetas_overlay:
             ax_surf.plot([th, th], [0, T], color=ov_color, alpha=ov_alpha, linewidth=0.9)
     fig.colorbar(pcm, ax=ax_surf, orientation='vertical', pad=0.1)
+    # Rasterize heavy mesh for SVG friendliness while keeping labels/ticks vector
+    try:
+        pcm.set_rasterized(True)
+    except Exception:
+        pass
 
     # Middle-left: instability polar for this side
     ax_inst = fig.add_subplot(gs[1, 0], projection='polar')
@@ -329,6 +357,10 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
     ax_inst.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
     ax_inst.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
     ax_inst.set_title(f"Side {side} – Instability")
+    try:
+        pcm2.set_rasterized(True)
+    except Exception:
+        pass
 
     # Middle-right: angular heatmap (track x angle)
     ax_hm = fig.add_subplot(gs[1, 1])
@@ -338,6 +370,10 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         ax_hm.set_ylabel('Track')
         ax_hm.set_title('Angular Activity (track × angle)')
         plt.colorbar(im, ax=ax_hm, fraction=0.046, pad=0.04)
+        try:
+            im.set_rasterized(True)
+        except Exception:
+            pass
     else:
         ax_hm.axis('off')
         ax_hm.text(0.5, 0.5, 'No angular histograms', ha='center', va='center')
@@ -365,9 +401,16 @@ def render_side_report(sm: dict, instab_scores: dict, side: int, out_prefix: Pat
         ax_h.text(0.5, 0.5, 'No interval histogram', ha='center', va='center')
 
     plt.tight_layout()
-    outfile = Path(str(out_prefix) + f"_side{side}_report.png")
-    plt.savefig(str(outfile), dpi=180)
-    plt.close()
+    # Export format control: default png; allow svg or both via args.export_format
+    fmt = str(getattr(args, 'export_format', 'png') or 'png').lower()
+    base = Path(str(out_prefix) + f"_side{side}_report")
+    try:
+        if fmt in ('png', 'both'):
+            plt.savefig(str(base.with_suffix('.png')), dpi=180)
+        if fmt in ('svg', 'both'):
+            plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+    finally:
+        plt.close()
 
 
 def render_single_track_detail(sm: dict, out_prefix: Path) -> None:
@@ -470,6 +513,247 @@ def render_instability_map(instab_scores: dict, T: int, out_prefix: Path) -> Non
         cbar = plt.colorbar(pcm, cax=cax, orientation='vertical')
         cbar.set_label('Instability Score (0-1)')
     plt.tight_layout()
+    # Add rasterization for SVG friendliness
+    try:
+        for ax in [ax0, ax1]:
+            for coll in ax.collections:
+                try:
+                    coll.set_rasterized(True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # Backward compatibility: no args here, so default to PNG only
     outfile = Path(str(out_prefix) + "_instability_map.png")
     plt.savefig(str(outfile), dpi=220)
     plt.close()
+
+
+def render_disk_dashboard(sm: dict, instab_scores: dict, out_prefix: Path, args) -> None:
+    """Render a whole-disk dashboard combining both sides:
+    Row1: Side0 density polar | Side1 density polar
+    Row2: Side0 instability   | Side1 instability
+    Row3: Side0 ang heatmap   | Side1 ang heatmap
+    Row4: Side0 interval hist | Side1 interval hist
+    """
+    # Helper to gather per-side data
+    def side_entries(track_obj, side_int):
+        if not isinstance(track_obj, dict):
+            return []
+        v = track_obj.get(side_int)
+        if v is None:
+            v = track_obj.get(str(side_int))
+        if isinstance(v, dict):
+            return [v]
+        return v if isinstance(v, list) else []
+
+    try:
+        max_track = max([int(k) for k in sm.keys() if k != 'global'], default=83)
+    except Exception:
+        max_track = 83
+    T = max(max_track + 1, 1)
+
+    # Common angular grid
+    theta = np.linspace(0, 2 * np.pi, 1440)
+
+    # Build density radials and color scale across sides
+    radials = {}
+    masks = {}
+    dens_vals_all = []
+    for side in [0, 1]:
+        radial = np.zeros(T)
+        has = np.zeros(T, dtype=bool)
+        for tk in sm:
+            if tk == 'global':
+                continue
+            try:
+                ti = int(tk)
+            except Exception:
+                continue
+            dvals = []
+            for ent in side_entries(sm[tk], side):
+                if isinstance(ent, dict):
+                    d = ent.get('analysis', {}).get('density_estimate_bits_per_rev')
+                    if isinstance(d, (int, float)):
+                        dvals.append(float(d))
+            if dvals:
+                val = float(np.mean(dvals))
+                radial[ti] = val
+                has[ti] = True
+                dens_vals_all.append(val)
+        radials[side] = radial
+        masks[side] = has
+
+    if len(dens_vals_all) >= 2:
+        vmin = float(np.percentile(dens_vals_all, 5))
+        vmax = float(np.percentile(dens_vals_all, 95))
+        if vmax <= vmin:
+            vmax = vmin + 1.0
+    else:
+        vmin, vmax = 0.0, 1.0
+
+    # Upsample radial
+    up_factor = 4
+    Tu = max(T * up_factor, T)
+    r_up = np.linspace(0, T, Tu)
+    def upsample(radial, has):
+        if has.sum() >= 2:
+            xs = np.where(has)[0]
+            ys = radial[has]
+            return np.interp(r_up, xs, ys)
+        fill = float(radial[has][0]) if has.any() else 0.0
+        return np.full_like(r_up, fill, dtype=float)
+    radial_up = {s: upsample(radials[s], masks[s]) for s in [0, 1]}
+    TH, R = np.meshgrid(theta, r_up)
+
+    # Build angular heatmaps and interval histograms per side
+    def build_ang_heat_and_hist(side: int):
+        # Determine ang_bins
+        ang_bins = 0
+        for tk in sm:
+            if tk == 'global':
+                continue
+            lst = side_entries(sm[tk], side)
+            if not lst:
+                continue
+            ent = lst[0] if isinstance(lst, list) else lst
+            bins = ent.get('analysis', {}).get('angular_bins') if isinstance(ent, dict) else None
+            if isinstance(bins, int) and bins > ang_bins:
+                ang_bins = bins
+        heatmap = None
+        if ang_bins and ang_bins > 0:
+            heatmap = np.zeros((T, ang_bins), dtype=float)
+            present = np.zeros(T, dtype=bool)
+            for tk in sm:
+                if tk == 'global':
+                    continue
+                try:
+                    ti = int(tk)
+                except Exception:
+                    continue
+                lst = side_entries(sm[tk], side)
+                if not lst:
+                    continue
+                ent = lst[0] if isinstance(lst, list) else lst
+                ah = ent.get('analysis', {}).get('angular_hist') if isinstance(ent, dict) else None
+                if isinstance(ah, list) and len(ah) == ang_bins:
+                    heatmap[ti, :] = np.array(ah, dtype=float)
+                    present[ti] = True
+            for i in range(T):
+                if not present[i]:
+                    heatmap[i, :] = np.nan
+        # Aggregated interval histogram
+        agg = None; edges = None; acc = None; count = 0; first_edges = None
+        for tk in sm:
+            if tk == 'global':
+                continue
+            lst = side_entries(sm[tk], side)
+            if not lst:
+                continue
+            ent = lst[0] if isinstance(lst, list) else lst
+            if not isinstance(ent, dict):
+                continue
+            an = ent.get('analysis', {})
+            ih = an.get('interval_hist'); ih_bins = an.get('interval_hist_bins'); ih_range = an.get('interval_hist_range_ns')
+            if isinstance(ih, list) and isinstance(ih_bins, int) and ih_bins > 0 and isinstance(ih_range, list) and len(ih_range) == 2:
+                if first_edges is None:
+                    mn, mx = float(ih_range[0]), float(ih_range[1])
+                    first_edges = np.logspace(np.log10(max(mn, 1.0)), np.log10(max(mx, mn + 1.0)), ih_bins + 1)
+                vec = np.array(ih, dtype=float)
+                acc = vec.copy() if acc is None else (acc + vec)
+                count += 1
+        if acc is not None and count > 0:
+            agg = acc / float(count)
+            edges = first_edges
+        return heatmap, (agg, edges)
+
+    hm0, (h0, e0) = build_ang_heat_and_hist(0)
+    hm1, (h1, e1) = build_ang_heat_and_hist(1)
+
+    # Compose figure (4 rows x 2 cols)
+    fig = plt.figure(figsize=(13, 16))
+    gs = GridSpec(4, 2, height_ratios=[1.6, 1.2, 1.2, 1.2], width_ratios=[1.0, 1.0], figure=fig)
+
+    # Row 1: density polar side0 | side1
+    for col, side in enumerate([0, 1]):
+        ax = fig.add_subplot(gs[0, col], projection='polar')
+        Z = np.repeat(radial_up[side][:, None], theta.shape[0], axis=1)
+        pcm = ax.pcolormesh(TH, R, Z, cmap='viridis', vmin=vmin, vmax=vmax, shading='auto')
+        ax.set_ylim(0, T)
+        ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
+        ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
+        ax.set_title(f"Side {side} – Density")
+        try:
+            pcm.set_rasterized(True)
+        except Exception:
+            pass
+
+    # Add shared colorbar for row 1
+    try:
+        import matplotlib as _mpl
+        cax = fig.add_axes([0.92, 0.76, 0.015, 0.18])
+        m = _mpl.cm.ScalarMappable(cmap='viridis')
+        m.set_clim(vmin, vmax)
+        cb = fig.colorbar(m, cax=cax)
+        cb.set_label('Bits per Revolution')
+    except Exception:
+        pass
+
+    # Row 2: instability polar side0 | side1
+    for col, side in enumerate([0, 1]):
+        ax = fig.add_subplot(gs[1, col], projection='polar')
+        inst_rad = np.array([float(instab_scores.get(side, {}).get(ti, 0.0)) for ti in range(T)])
+        Zr = np.interp(r_up, np.arange(T), inst_rad)
+        Z = np.repeat(Zr[:, None], theta.shape[0], axis=1)
+        pcm2 = ax.pcolormesh(TH, R, Z, cmap='magma', vmin=0.0, vmax=1.0, shading='auto')
+        ax.set_ylim(0, T)
+        ax.set_yticks([0, T // 4, T // 2, 3 * T // 4, T - 1])
+        ax.set_yticklabels(["0", str(T // 4), str(T // 2), str(3 * T // 4), str(T - 1)])
+        ax.set_title(f"Side {side} – Instability")
+        try:
+            pcm2.set_rasterized(True)
+        except Exception:
+            pass
+
+    # Row 3: angular heatmaps
+    for col, (hm, side) in enumerate([(hm0, 0), (hm1, 1)]):
+        ax = fig.add_subplot(gs[2, col])
+        if hm is not None:
+            im = ax.imshow(hm, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
+            ax.set_title(f"Side {side} – Angular Activity (track × angle)")
+            ax.set_xlabel('Angle bin')
+            ax.set_ylabel('Track')
+            try:
+                im.set_rasterized(True)
+            except Exception:
+                pass
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        else:
+            ax.axis('off')
+            ax.text(0.5, 0.5, 'No angular histograms', ha='center', va='center')
+
+    # Row 4: aggregated interval histograms
+    for col, (agg, edges, side) in enumerate([(h0, e0, 0), (h1, e1, 1)]):
+        ax = fig.add_subplot(gs[3, col])
+        if agg is not None and edges is not None:
+            centers = np.sqrt(edges[:-1] * edges[1:])
+            ax.bar(centers, agg, width=np.diff(edges), align='center', alpha=0.85, color='steelblue')
+            ax.set_xscale('log')
+            ax.set_xlim(edges[0], edges[-1])
+            ax.set_xlabel('Interval (ns, log)')
+            ax.set_ylabel('Norm density')
+            ax.set_title(f"Side {side} – Flux Interval Histogram")
+        else:
+            ax.axis('off')
+            ax.text(0.5, 0.5, 'No interval histogram', ha='center', va='center')
+
+    plt.tight_layout()
+    fmt = str(getattr(args, 'export_format', 'png') or 'png').lower()
+    base = Path(str(out_prefix) + "_dashboard")
+    try:
+        if fmt in ('png', 'both'):
+            plt.savefig(str(base.with_suffix('.png')), dpi=180)
+        if fmt in ('svg', 'both'):
+            plt.savefig(str(base.with_suffix('.svg')), dpi=180, format='svg')
+    finally:
+        plt.close()

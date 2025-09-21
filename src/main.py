@@ -302,6 +302,7 @@ def analyze_corpus(args):
                     overlay_mode=getattr(args, 'overlay_mode', 'mfm'),
                     gcr_candidates=getattr(args, 'gcr_candidates', '10,12,8,9,11,13'),
                     overlay_sectors_hint=getattr(args, 'overlay_sectors_hint', None),
+                    export_format='png',
                 )
                 analyze_disk(disk_args)
                 # Verify that surface_map.json was produced; if missing, track it
@@ -1340,6 +1341,7 @@ def main():
     analyze_disk_parser.add_argument("--overlay-mode", choices=["mfm","gcr","auto"], default="mfm", dest="overlay_mode", help="Overlay heuristic mode")
     analyze_disk_parser.add_argument("--gcr-candidates", default="10,12,8,9,11,13", dest="gcr_candidates", help="Comma-separated GCR sector count candidates")
     analyze_disk_parser.add_argument("--overlay-sectors-hint", type=int, dest="overlay_sectors_hint", help="Explicit sector count hint")
+    analyze_disk_parser.add_argument("--export-format", choices=["png","svg","both"], default="png", dest="export_format", help="Output format for figures (default: png)")
     analyze_disk_parser.set_defaults(func=(analyze_disk_cmd if analyze_disk_cmd else lambda _args: (print("analyze_disk not available"), 1)[1]))
 
     # Analyze Corpus
