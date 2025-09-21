@@ -8,45 +8,38 @@
   <em>Sample per‑disk composite: flux plots, polar disk surface (both sides), density/variance by track</em>
  </p>
 
-FloppyAI focuses on analyzing KryoFlux raw flux streams to understand the magnetic surface of floppy disks. There is no sector-level assumption; we work purely at the flux level to find strong/weak regions and plan better data layouts.
+FloppyAI visualizes KryoFlux STREAM flux data to study the magnetic surface of floppy disks. It assumes no filesystem/sectors by default and focuses on flux behavior: density per track, instability, angular structure, and interval distributions. Perfect for experiments and media/head tolerance studies.
 
-## Quick Start (Corpus-first)
+## Quick Start: Visualize KryoFlux Streams
 
-1) Prepare your dumps
-- Organize per-disk under a root folder, for example:
-  - `stream_dumps/`
-    - `diskA/kryoflux_stream/*.raw`
-    - `diskB/kryoflux_stream/*.raw`
-- Name the folders meaningfully; output labels derive from these names.
+1) Capture STREAMs on Linux (KryoFlux DTC)
+- Use the provided forensic‑rich scripts to capture flux with many revolutions and cooldowns:
+  - `scripts/linux/capture_forensic_full_disk.sh`
+  - `scripts/linux/capture_forensic_repeat_track.sh`
+  - `scripts/linux/capture_forensic_sweep.sh`
+  - `scripts/linux/capture_forensic_long_rev.sh`
+- See the full guide: `FloppyAI/docs/forensic_capture_guide.md`.
 
-2) Run corpus analysis (from the repository root)
+2) Analyze on Windows (or any machine with Python)
 ```bash
-python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --rpm 360.0 --summarize \
-  --lm-host HOST[:PORT] --lm-model MODEL_NAME --lm-temperature 0.0
+python FloppyAI/src/main.py analyze_disk .\captures\<your_run_folder> \
+  --profile 35HD --angular-bins 720 \
+  --output-dir .\test_outputs\<name>
 ```
-- Tip: prefer the direct-run form `python FloppyAI/src/main.py` (module mode works too if you prefer).
-- `--generate-missing` processes each disk with `analyze_disk`.
-- `--rpm 360.0` assumes a 1.2MB 5.25" drive.
 
-3) Inspect outputs
-- One image per disk: `test_outputs/<timestamp>/disks/<disk-label>/<disk-label>_composite.png` (now includes Instability Map panel)
-- Standalone polar disk surface (both sides): `.../<disk-label>_disk_surface.png`
-- High‑res side images: `.../<disk-label>_surface_side0.png`, `.../<disk-label>_surface_side1.png`
-- Instability summary CSV: `.../<disk-label>_instability_summary.csv`
-- Corpus surfaces montages: `corpus_surfaces_grid.png`, `corpus_side0_surfaces_grid.png`, `corpus_side1_surfaces_grid.png`
-- Corpus summary and plots: `test_outputs/<timestamp>/corpus_*` and `corpus_summary.json`
+3) Open the outputs
+- `<name>_disk_surface.png` — Side 0 | Side 1 polar density per track
+- `<name>_instability_map.png` — Both sides instability
+- `<name>_side0_report.png`, `<name>_side1_report.png` — Per‑side composite:
+  - Top: density polar (optional sector overlays)
+  - Middle‑left: instability polar
+  - Middle‑right: angular heatmap (track × angle)
+  - Bottom‑right: aggregated flux interval histogram (log ns)
+- `surface_map.json`, `run.log` — Provenance and stats
 
-4) Interpret the composite
-- Flux intervals and histogram reveal timing distribution.
-- Flux heatmap (rev vs position) shows surface consistency and weak regions.
-- Polar map overlays Side 0/1 density per track with a clear colorbar.
-- Density/Variance by track show radial trends.
-- Title includes a simple HD/DD heuristic from mean cell interval.
-
-5) Workflow (surface-first)
-- Build baselines on new, unformatted floppies.
-- Format, re-read, and compare to the baseline.
-- Use the maps to plan where/what to write back (avoid noisy bands; pack stronger tracks).
+Notes:
+- Default export is PNG; SVG for large reports will be added where appropriate.
+- For PC 3.5" HD, `--profile 35HD` sets 300 RPM; for 5.25" HD use `--profile 525HD` (360 RPM).
 
 ## How to Run
 
@@ -125,7 +118,9 @@ Generates per-file flux plots and stats.
 
 1. Python 3.8+ and `pip`.
 2. `pip install -r requirements.txt`.
-3. Hardware: KryoFlux connected; DTC.exe in `../lib/kryoflux_3.50_windows_r2/dtc/`.
+3. Hardware: KryoFlux connected.
+   - Local (Windows) setups: DTC.exe in `../lib/kryoflux_3.50_windows_r2/dtc/`.
+   - Cross‑machine setups: If DTC is on a Linux host (sudo required), do not attempt to orchestrate DTC from Windows. Instead, generate `.raw` on Windows, run write/read via bash scripts on the Linux host, then analyze on Windows. See `docs/usage.md` → “Cross‑machine (Linux DTC) workflow”.
 4. Optional LLM: run LM Studio locally and pass `--lm-host` and `--lm-model`.
 
 ## Disk Surface Visualization
@@ -227,6 +222,18 @@ python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --m
 - Outputs respect `--output-dir` without adding timestamps. If omitted, `test_outputs/<timestamp>/` is used.
 - We intentionally avoid sector/FS assumptions to focus on physical surface characteristics.
 - The corpus overlays and per-disk labels prefer stream file names.
+- Cross‑machine Linux DTC: See `docs/usage.md` → “Cross‑machine (Linux DTC) workflow” for the recommended manual script-based process.
+
+### Linux DTC Script (on the hardware host)
+
+When running hardware on a Linux host, you can use the helper script to write then read with DTC:
+```bash
+chmod +x FloppyAI/scripts/linux/dtc_write_read.sh
+FloppyAI/scripts/linux/dtc_write_read.sh \
+  --write /path/to/generated.raw --track 80 --side 0 --revs 3 \
+  --out-dir ./captures --drive 0
+```
+This produces a timestamped capture in `--out-dir` along with a `.log` containing the exact `dtc` commands and version used. Adjust flags to suit your environment; sudo is used by default (pass `--no-sudo` to disable).
 
 ## Commands
 
@@ -242,35 +249,36 @@ python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --m
    - For blanks: High variance indicates surface irregularities; low anomalies = clean media.
 
 2. **Read Track from Hardware**:
-   ```
-   python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir]
-   ```
-   - Reads track/side (e.g., 0 0) to .raw using DTC.
-   - --revs: Revolutions (default 3 for better analysis).
-   - --simulate: Dry-run without hardware (no-op).
-   - --analyze: Auto-analyze output .raw.
-   - --rpm: Known RPM for normalization (default 360).
+  ```
+  python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir]
+  ```
+  - Reads track/side (e.g., 0 0) to .raw using DTC.
+  - --revs: Revolutions (default 3 for better analysis).
+  - --simulate: Dry-run without hardware (no-op).
+  - --analyze: Auto-analyze output .raw.
+  - --rpm: Known RPM for normalization (default 360).
+  - Note: This command assumes local DTC availability. For cross‑machine Linux DTC setups, use the Linux bash scripts on that host and then analyze the captured `.raw` on Windows.
    - Use for blanks: Reveals baseline flux noise for custom encoding.
 
 3. **Write Stream to Hardware**:
-   ```
-   python FloppyAI/src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir]
-   ```
-   - Writes .raw to track/side.
-   - --simulate: Dry-run (logs command).
-   - Test custom flux on blanks to explore readability.
+  ```
+  python FloppyAI/src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir]
+  ```
+  - Writes .raw to track/side.
+  - --simulate: Dry-run (logs command).
+  - Test custom flux on blanks to explore readability.
+  - Note: This command assumes local DTC availability. For cross‑machine setups, perform the write on the Linux DTC host via bash scripts.
 
 4. **Generate Dummy Stream** (Build custom flux for testing):
    ```
    python FloppyAI/src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir]
    ```
-   - Creates .raw with uniform intervals + noise (simulate one revolution).
-   - --revs: Number of revolutions.
-   - --cell: Nominal cell length ns (vary for density: shorter = higher density).
-   - --analyze: Auto-analyze output.
-   - --rpm: Known RPM for normalization (default 360).
-   - Example: `python FloppyAI/src/main.py generate 0 0 --cell 2000 --analyze`
-     - Generates denser flux; analyze to see interval distribution.
+  - --revs: Number of revolutions.
+  - --cell: Nominal cell length ns (vary for density: shorter = higher density).
+  - --analyze: Auto-analyze output.
+  - --rpm: Known RPM for normalization (default 360).
+  - Example: `python FloppyAI/src/main.py generate 0 0 --cell 2000 --analyze`
+  - Generates denser flux; analyze to see interval distribution.
 
 5. **Encode Binary Data to Custom Stream** (Prototype higher density encoding):
    ```
