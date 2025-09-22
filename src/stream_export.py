@@ -1,6 +1,7 @@
 import struct
 from pathlib import Path
 from typing import List
+from datetime import datetime
 import numpy as np
 
 # Constants for revolution times (ns)
@@ -39,7 +40,7 @@ def write_kryoflux_stream(
     rpm: float | None = None,
     sck_hz: float = 24000000.0,
     rev_lengths: List[int] | None = None,
-    header_mode: str = 'oob',
+    header_mode: str = 'ascii',
     include_sck_oob: bool = True,
     include_initial_index: bool = True,
     ick_hz: float = 3000000.0,
@@ -123,10 +124,17 @@ def write_kryoflux_stream(
 
     # Build stream starting with KFInfo (Type 0x04). Emit two strings to mirror typical device output.
     stream = bytearray()
+    now = datetime.now()
+    host_date = now.strftime('%Y.%m.%d')
+    host_time = now.strftime('%H:%M:%S')
+    dev_date = now.strftime('%b %d %Y')  # e.g., "Mar 19 2011"
+    dev_time = now.strftime('%H:%M:%S')
     info_txt1 = (
-        f"name=KryoFlux DiskSystem, version={version}, hwid=1, hwrv=1\x00"
+        f"host_date={host_date}, host_time={host_time}, name=KryoFlux DiskSystem, "
+        f"version={version}, date={dev_date}, time={dev_time}, hwid=1, hwrv=1\x00"
     )
-    info_txt2 = f"sck={float(sck_hz):.7f}, ick={float(ick_hz):.7f}\x00"
+    # Use higher precision for clocks to mirror examples in the reference doc
+    info_txt2 = f"sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}\x00"
     stream.extend(oob_block(0x04, info_txt1.encode('ascii')))
     stream.extend(oob_block(0x04, info_txt2.encode('ascii')))
     # Optional initial index marker at start-of-stream (counters at 0)
