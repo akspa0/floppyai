@@ -41,7 +41,8 @@ INTERVAL_NS=4000         # for constant
 MEAN_NS=4000.0           # for random
 STD_NS=400.0             # for random
 REV_TIME_NS=200000000    # ~300 RPM
-SCK_HZ=24027428.5714285
+SCK_HZ=24000000.0        # exact 24 MHz default for broader compatibility
+HEADER_MODE="ascii"      # ascii|oob (ascii preamble preferred for HxC)
 USE_SUDO=1
 SANITY=0
 # Extended pattern params
@@ -69,6 +70,7 @@ while [[ $# -gt 0 ]]; do
     --sweep-min-ns) SWEEP_MIN_NS=${2:?}; shift 2;;
     --sweep-max-ns) SWEEP_MAX_NS=${2:?}; shift 2;;
     --seed) SEED=${2:?}; shift 2;;
+    --header-mode) HEADER_MODE=${2:?}; shift 2;;
     --no-sudo) USE_SUDO=0; shift 1;;
     --sanity) SANITY=1; shift 1;;
     -h|--help)
@@ -121,6 +123,7 @@ python3 "$PATTERN_GEN" \
   --sweep-min-ns "$SWEEP_MIN_NS" \
   --sweep-max-ns "$SWEEP_MAX_NS" \
   --seed "$SEED" \
+  --header-mode "$HEADER_MODE" \
   --output-dir "$PAT_DIR" | tee -a "$LOG_FILE"
 
 # 2) Write set and 3) Read back captures
