@@ -60,18 +60,29 @@ def write_kryoflux_stream(
         return max(0, int(round((float(ns_val) * sck_hz) / 1e9)))
 
     def encode_ticks(ticks: int) -> bytes:
-        # Emit C2 samples using 16-bit values with overflow markers only.
-        # This is broadly supported by tools like HxC.
+        """
+        KryoFlux C2 sample encoding (commonly accepted by tools):
+          - 0..13 ticks:  0x00, <byte:0..13>
+          - 14..255:     <single byte: 0x0E..0xFF>
+          - >=256:       0x0B repeated (adds 65536 each), then 0x0C + uint16 LE
+        """
         if ticks < 0:
             ticks = 0
         parts = bytearray()
-        if ticks > 0xFFFF:
-            overflow = ticks // 65536
-            ticks = ticks % 65536
-            parts.extend(b"\x0B" * int(overflow))  # c2eOverflow16
-        parts.append(0x0C)  # c2eValue16
-        parts.append(ticks & 0xFF)
-        parts.append((ticks >> 8) & 0xFF)
+        # Emit overflow markers in chunks of 65536
+        while ticks > 0xFFFF:
+            parts.append(0x0B)  # c2eOverflow16
+            ticks -= 65536
+        if ticks <= 13:
+            parts.append(0x00)  # small sample prefix
+            parts.append(ticks & 0xFF)
+        elif ticks <= 255:
+            # Single byte sample. 0x0D is reserved (OOB), but ticks in this branch are 14..255.
+            parts.append(ticks & 0xFF)
+        else:
+            parts.append(0x0C)  # c2eValue16
+            parts.append(ticks & 0xFF)
+            parts.append((ticks >> 8) & 0xFF)
         return bytes(parts)
 
     def oob_block(typ: int, payload: bytes = b"") -> bytes:
@@ -108,6 +119,8 @@ def write_kryoflux_stream(
         pass
     info_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
+    # Optional initial index marker so streams clearly start at an index boundary
+    stream.extend(oob_block(2))
 
     pos = 0
     for i, cnt in enumerate(splits):
