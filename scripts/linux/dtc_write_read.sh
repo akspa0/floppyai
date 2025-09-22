@@ -121,8 +121,52 @@ WRITE_DIR=$(dirname "${WRITE_INPUT}")
 WRITE_BASE=$(basename "${WRITE_INPUT}")
 pushd "$WRITE_DIR" >/dev/null
 
+# Decide write mode for image type 4: prefix (preferred) or per-file fallback
+WRITE_PREFIX=""
+PERFILE_BASE=""
+
+# Detect naming from the provided file name
+if [[ "$WRITE_BASE" =~ ^track([0-9]{2})\.([01])\.raw$ ]]; then
+  WRITE_PREFIX="track"
+  EXPECTED=$(printf "track%02d.%d.raw" "$TRACK" "$SIDE")
+elif [[ "$WRITE_BASE" =~ ^([0-9]{2})\.([01])\.raw$ ]]; then
+  WRITE_PREFIX="./"
+  EXPECTED=$(printf "%02d.%d.raw" "$TRACK" "$SIDE")
+else
+  # Unknown naming; use per-file base (strip .raw)
+  PERFILE_BASE="${WRITE_BASE%.raw}"
+  EXPECTED="${PERFILE_BASE}.raw"
+fi
+
+# Validate expected file exists for the requested track/side
+if [[ -n "$WRITE_PREFIX" ]]; then
+  if [[ ! -f "$EXPECTED" ]]; then
+    echo "[ERROR] Expected file not found for track=$TRACK side=$SIDE: $EXPECTED" | tee -a "$LOG_PATH"
+    echo "[PWD] $(pwd)" | tee -a "$LOG_PATH"
+    ls -l | tee -a "$LOG_PATH"
+    popd >/dev/null
+    exit 2
+  fi
+else
+  if [[ ! -f "$EXPECTED" ]]; then
+    echo "[WARN] Per-file mode: input file not found as '$EXPECTED' in current dir; trying original name '$WRITE_BASE'"
+    if [[ -f "$WRITE_BASE" ]]; then
+      PERFILE_BASE="${WRITE_BASE%.raw}"
+    else
+      echo "[ERROR] Neither '$EXPECTED' nor '$WRITE_BASE' exists in $(pwd)." | tee -a "$LOG_PATH"
+      ls -l | tee -a "$LOG_PATH"
+      popd >/dev/null
+      exit 2
+    fi
+  fi
+fi
+
 # Build exact write/read command strings for logging
-WRITE_STR="${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w"
+if [[ -n "$WRITE_PREFIX" ]]; then
+  WRITE_STR="${SUDO_PREFIX}${DTC_BIN} -f${WRITE_PREFIX} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w"
+else
+  WRITE_STR="${SUDO_PREFIX}${DTC_BIN} -f${PERFILE_BASE} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w"
+fi
 READ_STR="${SUDO_PREFIX}${DTC_BIN} -f${BASE_NAME} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS}"
 
 echo "[WRITE] $WRITE_STR"
@@ -139,10 +183,18 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 # Execute write
-if [[ $USE_SUDO -eq 1 ]]; then
-  sudo "$DTC_BIN" -f"$WRITE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+if [[ -n "$WRITE_PREFIX" ]]; then
+  if [[ $USE_SUDO -eq 1 ]]; then
+    sudo "$DTC_BIN" -f"$WRITE_PREFIX" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  else
+    "$DTC_BIN" -f"$WRITE_PREFIX" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  fi
 else
-  "$DTC_BIN" -f"$WRITE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  if [[ $USE_SUDO -eq 1 ]]; then
+    sudo "$DTC_BIN" -f"$PERFILE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  else
+    "$DTC_BIN" -f"$PERFILE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  fi
 fi
 popd >/dev/null
 
