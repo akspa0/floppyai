@@ -19,19 +19,20 @@ Usage: capture_forensic_sweep.sh [options]
 Optional (common):
   --drive <N>            DTC drive index (default: 0)
   --dtc-path <path>      Path to dtc executable (default: dtc)
-  --out-dir <dir>        Output directory (default: ./captures)
+  --out-dir <dir>        Output directory (default: output_captures under repo)
   --label <name>         Label used in filenames (default: sweep)
   --no-sudo              Do not prefix dtc with sudo (default: sudo on)
   --dry-run              Print commands only; do not execute
   --rich                 Enable extra dtc flags (-t1 -k1 and, unless disabled, -m2 -l63 -p)
   --no-p                 When rich, do not include -p
   --no-ml                When rich, do not include -m2 -l63
+  --sanity               Run stream_sanity.py over track*.raw at the end
 
 Optional (capture profile):
   --profile <name>       One of: 35HD, 35DD, 525HD, 525DD (sets default track range)
   --sides <both|0|1>     Which sides to capture (default: both)
   --start-track <N>      Starting track (default from profile or 0)
-  --end-track <N>        Ending track inclusive (default from profile or 79/39)
+  --end-track <N>        Ending track inclusive (default: 82 when not specified)
   --step <N>             Track step (default: 1)
   --sweeps <N>           Number of sweeps (default: 3). Each sweep goes forward then backward.
   --revs <N>             Revolutions per capture (default: 3)
@@ -40,10 +41,13 @@ Optional (capture profile):
 USAGE
 }
 
+# Resolve script directory for repo-relative defaults
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Defaults
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="/srv/kryoflux/captures"
+OUT_DIR="$SCRIPT_DIR/../../output_captures"
 LABEL="sweep"
 USE_SUDO=1
 DRY_RUN=0
@@ -59,6 +63,7 @@ SPINUP=2
 RICH=0
 NO_P=0
 NO_ML=0
+SANITY=0
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -81,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     --rich) RICH=1; shift 1;;
     --no-p) NO_P=1; shift 1;;
     --no-ml) NO_ML=1; shift 1;;
+    --sanity) SANITY=1; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown option: $1" >&2; usage; exit 2;;
   esac
@@ -89,19 +95,15 @@ done
 # Apply profile defaults for track ranges if not provided
 if [[ -n "$PROFILE" ]]; then
   case "${PROFILE^^}" in
-    35HD|35DD|525HD)
+    35HD|35DD|525HD|525DD)
       : ${START_TRACK:="0"}
-      : ${END_TRACK:="79"}
-      ;;
-    525DD)
-      : ${START_TRACK:="0"}
-      : ${END_TRACK:="39"}
+      : ${END_TRACK:="82"}
       ;;
     *) echo "Warning: unknown profile '$PROFILE', using generic defaults";;
   esac
 fi
 : ${START_TRACK:="0"}
-: ${END_TRACK:="79"}
+: ${END_TRACK:="82"}
 
 # Validate
 if ! [[ "$SIDES" == "both" || "$SIDES" == "0" || "$SIDES" == "1" ]]; then
@@ -131,7 +133,7 @@ umask 0002
 
 build_read_cmd() {
   local start=$1 end=$2 side=$3
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${start} -e${end} -g${side} -r${REVS} -ftrack"
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -ftrack -i0 -d${DRIVE} -s${start} -e${end} -g${side} -r${REVS}"
   if (( RICH == 1 )); then
     if (( NO_ML == 0 )); then cmd+=" -m2 -l63"; fi
     cmd+=" -t1 -k1"

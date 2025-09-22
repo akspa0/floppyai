@@ -46,7 +46,9 @@ DTC_BIN="/usr/bin/dtc"
 TRACKS_SPEC=""
 SIDES_SPEC="0,1"
 REVS=3
-OUT_DIR="./captures"
+# Resolve script directory for repo-relative default output
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT_DIR="$SCRIPT_DIR/../../output_captures"
 READ_BACK=0
 USE_SUDO=1
 DRY_RUN=0
@@ -182,7 +184,7 @@ pushd "$IMAGE_DIR" >/dev/null
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
   base=$(printf "%02d.%d" "$t" "$s")
-  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -wi4 -f${base} -s${t} -e${t} -g${s} -w")
+  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${base} -wi4 -d${DRIVE} -s${t} -e${t} -g${s} -w")
   echo "[WRITE] ${CMD[*]}"
   echo "[WRITE] ${CMD[*]}" >>"$LOG_PATH"
   if [[ $DRY_RUN -eq 1 ]]; then continue; fi
@@ -201,7 +203,7 @@ if [[ $READ_BACK -eq 1 ]]; then
   for entry in "${SORTED[@]}"; do
     IFS=':' read -r t s p <<<"$entry"
     pref="capture_$(printf "%02d" "$t").$s"
-    CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${t} -e${t} -g${s} -r${REVS} -f${pref}")
+    CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${pref} -i0 -d${DRIVE} -s${t} -e${t} -g${s} -r${REVS}")
     echo "[READ ] ${CMD[*]}"
     echo "[READ ] ${CMD[*]}" >>"$LOG_PATH"
     if [[ $DRY_RUN -eq 1 ]]; then continue; fi

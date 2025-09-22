@@ -49,7 +49,9 @@ SIDE=""
 REVS=3
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="./captures"
+# Resolve script directory for repo-relative default output
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT_DIR="$SCRIPT_DIR/../../output_captures"
 LABEL=""
 USE_SUDO=1
 DRY_RUN=0
@@ -110,18 +112,18 @@ fi
 {
   echo "dtc_write_read.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"
-  $DTC_BIN -V || true
+  echo "dtc header:"
+  "$DTC_BIN" 2>&1 | head -n 4 || true
   echo
 } >"$LOG_PATH"
 
 WRITE_DIR=$(dirname "${WRITE_INPUT}")
 WRITE_BASE=$(basename "${WRITE_INPUT}")
 pushd "$WRITE_DIR" >/dev/null
-WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -wi4 -f${WRITE_BASE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
+WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -wi4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
 
 # For read, run within OUT_DIR and use a prefix so DTC creates BASE_NAME%02d.%d.raw
-READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS} -f${BASE_NAME}")
+READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${BASE_NAME} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS}")
 
 echo "[WRITE] ${WRITE_CMD[*]}"
 echo "[READ ] ${READ_CMD[*]}"

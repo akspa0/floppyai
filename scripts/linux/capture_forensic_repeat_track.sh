@@ -22,13 +22,14 @@ Required:
 Optional (common):
   --drive <N>           DTC drive index (default: 0)
   --dtc-path <path>     Path to dtc executable (default: dtc)
-  --out-dir <dir>       Output directory (default: ./captures)
+  --out-dir <dir>       Output directory (default: output_captures under repo)
   --label <name>        Label used in filenames (default: repeat)
   --no-sudo             Do not prefix dtc with sudo (default: sudo on)
   --dry-run             Print commands only; do not execute
   --rich                Enable extra dtc flags (-t1 -k1 and, unless disabled, -m2 -l63 -p)
   --no-p                When rich, do not include -p
   --no-ml               When rich, do not include -m2 -l63
+  --sanity              Run stream_sanity.py over track*.raw at the end
 
 Optional (capture profile):
   --repeats <N>         Number of passes (default: 10)
@@ -38,11 +39,14 @@ Optional (capture profile):
 USAGE
 }
 
+# Resolve script directory for repo-relative defaults
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Defaults
 TRACK=""; SIDE=""
 DRIVE=0
 DTC_BIN="/usr/bin/dtc"
-OUT_DIR="/srv/kryoflux/captures"
+OUT_DIR="$SCRIPT_DIR/../../output_captures"
 LABEL="repeat"
 USE_SUDO=1
 DRY_RUN=0
@@ -51,6 +55,7 @@ REVS=3
 RICH=0
 NO_P=0
 NO_ML=0
+SANITY=0
 COOLDOWN=5
 SPINUP=2
 
@@ -68,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --rich) RICH=1; shift 1;;
     --no-p) NO_P=1; shift 1;;
     --no-ml) NO_ML=1; shift 1;;
+    --sanity) SANITY=1; shift 1;;
     --repeats) REPEATS=${2:?}; shift 2;;
     --revs) REVS=${2:?}; shift 2;;
     --cooldown) COOLDOWN=${2:?}; shift 2;;
@@ -106,7 +112,7 @@ echo "-- Spin-up ${SPINUP}s" | tee -a "$LOG_PATH"; sleep "$SPINUP"
 
 build_read_cmd() {
   local start=$1 end=$2 side=$3
-  local cmd="${SUDO_PREFIX}${DTC_BIN} -d${DRIVE} -i0 -s${start} -e${end} -g${side} -r${REVS} -ftrack"
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -ftrack -i0 -d${DRIVE} -s${start} -e${end} -g${side} -r${REVS}"
   if (( RICH == 1 )); then
     if (( NO_ML == 0 )); then cmd+=" -m2 -l63"; fi
     cmd+=" -t1 -k1"
@@ -137,4 +143,16 @@ if (( ${#files[@]} == 0 )); then
 fi
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_PATH"
+
+# Optional: run sanity checker
+if (( SANITY == 1 )); then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  TOOL="$SCRIPT_DIR/../../tools/stream_sanity.py"
+  if [[ -f "$TOOL" ]]; then
+    echo "Running stream sanity on track*.raw" | tee -a "$LOG_PATH"
+    python3 "$TOOL" --glob 'track*.raw' | tee -a "$LOG_PATH" || true
+  else
+    echo "WARN: sanity tool not found at $TOOL" | tee -a "$LOG_PATH"
+  fi
+fi
 popd >/dev/null
