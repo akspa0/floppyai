@@ -120,9 +120,11 @@ fi
 WRITE_DIR=$(dirname "${WRITE_INPUT}")
 WRITE_BASE=$(basename "${WRITE_INPUT}")
 pushd "$WRITE_DIR" >/dev/null
-WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -wi4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
+# Write from stream set (image type 4): place -f before -i and all others
+WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
 
 # For read, run within OUT_DIR and use a prefix so DTC creates BASE_NAME%02d.%d.raw
+# Read STREAM capture (image type 0): place -f before -i and all others
 READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${BASE_NAME} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS}")
 
 echo "[WRITE] ${WRITE_CMD[*]}"
