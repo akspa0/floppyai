@@ -173,9 +173,10 @@ run_read() {
 
 capture_side() {
   local side=$1 pass_idx=$2
-  local PASS_DIR=$(printf 'pass_%02d_side_%d' "$pass_idx" "$side")
+  local PASS_DIR=$(printf '%s/pass_%02d_side_%d' "$RUN_DIR" "$pass_idx" "$side")
   mkdir -p "$PASS_DIR"
   pushd "$PASS_DIR" >/dev/null
+  echo "[PWD  ] $(pwd)" | tee -a "$LOG_FILE"
   echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_FILE"
   sleep "$SPINUP"
   if (( STEP == 1 )); then
