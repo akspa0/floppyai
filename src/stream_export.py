@@ -97,8 +97,15 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream that begins with an OOB info block (type=4)
+    # Build stream that begins with sample clock OOB (type=8) and an OOB info block (type=4)
     stream = bytearray()
+    # OOB type 8: sample clock in Hz as uint32 LE
+    try:
+        sck_u32 = int(round(float(sck_hz))) & 0xFFFFFFFF
+        stream.extend(oob_block(8, struct.pack('<I', sck_u32)))
+    except Exception:
+        # Fallback: still emit info text if packing fails
+        pass
     info_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
 
