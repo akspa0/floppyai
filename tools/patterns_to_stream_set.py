@@ -184,7 +184,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--rev-time-ns", type=int, default=200_000_000, help="Target revolution time in ns (default ~300RPM)")
     ap.add_argument("--sck-hz", type=float, default=24_000_000.0, help="Sample clock for C2 stream (Hz, default 24 MHz)")
     ap.add_argument("--header-mode", choices=["ascii", "oob"], default="oob", help="File header style: ascii preamble or start with OOB info (default oob)")
-    ap.add_argument("--version-string", default="3.50", help="Version text for ASCII preamble and KFInfo (e.g., 3.50, 3.00s); default 3.50")
+    ap.add_argument("--version-string", default="3.00s", help="Version text for ASCII preamble and KFInfo (e.g., 3.00s, 3.50); default 3.00s")
     ap.add_argument("--no-sck-oob", action="store_true", help="DEPRECATED: Ignored (Type 0x08 Sample Clock OOB is not emitted)")
     # Initial index handling: default is OFF for compatibility
     ap.add_argument("--initial-index", action="store_true", help="Emit an initial OOB index marker at start (default off)")

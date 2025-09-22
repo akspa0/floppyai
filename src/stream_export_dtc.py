@@ -20,7 +20,7 @@ def write_kryoflux_stream_dtc(
     side: int,
     output_path: str,
     num_revs: int = 1,
-    version: str = '3.50',
+    version: str = '3.00s',
     rpm: float | None = None,
     sck_hz: float = 24027428.5714285,
     rev_lengths: List[int] | None = None,
@@ -99,10 +99,13 @@ def write_kryoflux_stream_dtc(
     # KFInfo #2: device info + sck/ick (no NUL terminator)
     dev_date = now.strftime('%b %d %Y')   # e.g., "Mar 27 2018"
     dev_time = now.strftime('%H:%M:%S')
-    # Print clocks with high precision similar to DTC dumps
+    # Print clocks with high precision similar to DTC dumps (trim trailing zeros)
+    def fmt_float(v: float) -> str:
+        s = f"{float(v):.16f}".rstrip('0').rstrip('.')
+        return s
     info2 = (
         f"name=KryoFlux DiskSystem, version={version}, date={dev_date}, time={dev_time}, "
-        f"hwid=1, hwrv=1, hs=1, sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}"
+        f"hwid=1, hwrv=1, hs=1, sck={fmt_float(sck_hz)}, ick={fmt_float(ick_hz)}"
     )
     stream.extend(oob_block(0x04, info2.encode('ascii')))
 
@@ -124,6 +127,7 @@ def write_kryoflux_stream_dtc(
 
     # Encode revolutions
     pos = 0
+    last_ticks = 0  # ticks of last emitted flux value (for Index.SampleCounter)
     for cnt in splits:
         if cnt <= 0:
             # Still emit index for empty rev
@@ -139,6 +143,7 @@ def write_kryoflux_stream_dtc(
             stream.extend(enc)
             isb_bytes += len(enc)
             total_sck_ticks += int(t)
+            last_ticks = int(t)
 
             # Periodic StreamInfo: payload SP equals current ISB bytes at insertion
             if include_streaminfo and next_streaminfo > 0:
@@ -148,11 +153,21 @@ def write_kryoflux_stream_dtc(
                     stream.extend(oob_block(0x01, struct.pack('<II', sp, tt)))
                     next_streaminfo += int(streaminfo_chunk_bytes)
 
-        # At rev boundary emit Index (SP=isb_bytes, SampleCounter since last flux to index ~0 synthetic, IndexCounter via clocks)
+        # At rev boundary emit Index (SP=isb_bytes, SampleCounter since last flux to index = last_ticks, IndexCounter via clocks)
         elapsed_seconds = float(total_sck_ticks) / float(sck_hz) if sck_hz > 0 else 0.0
         index_counter = int(round(elapsed_seconds * float(ick_hz)))
-        payload = struct.pack('<III', int(isb_bytes), 0, int(index_counter))
+        sample_since_last_flux = int(last_ticks)
+        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(index_counter))
         stream.extend(oob_block(0x02, payload))
+
+    # Ensure at least one flux cell after the final Index so all parsers register it
+    dummy_ticks = int(round(float(sck_hz) * 12e-6))  # ~12us
+    if dummy_ticks <= 0:
+        dummy_ticks = 1
+    enc = encode_ticks(dummy_ticks)
+    stream.extend(enc)
+    isb_bytes += len(enc)
+    total_sck_ticks += int(dummy_ticks)
 
     # StreamEnd (SP=isb_bytes, RC=0) then EOF (0x0D0D)
     stream.extend(oob_block(0x03, struct.pack('<II', int(isb_bytes), 0)))
