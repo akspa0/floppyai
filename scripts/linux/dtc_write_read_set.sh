@@ -187,30 +187,18 @@ unset IFS
 
 pushd "$IMAGE_DIR" >/dev/null
 
-# Determine dtc prefix expected by image type 4
-PREFIX="./"
-if [[ ${#SORTED[@]} -gt 0 ]]; then
-  IFS=':' read -r t0 s0 p0 <<<"${SORTED[0]}"
-  b0=$(basename "$p0")
-  if [[ "$b0" =~ ^track[0-9]{2}\.[01]\.raw$ ]]; then
-    PREFIX="track"
-  else
-    PREFIX="./"
-  fi
-fi
-echo "Using dtc prefix: $PREFIX" | tee -a "$LOG_PATH"
-
-# Write all (use write-from-stream: -i4 with -w); dtc will append NN.S.raw to PREFIX
+# Write all using per-file base names (e.g., 00.0 or track00.0) so dtc resolves <base>.raw
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
-  LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+  base=$(basename "$p" .raw)
+  LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${base} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
   echo "[WRITE] $LOG_CMD"
   echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
   if [[ $DRY_RUN -eq 1 ]]; then continue; fi
   if [[ $USE_SUDO -eq 1 ]]; then
-    sudo "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+    sudo "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
   else
-    "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+    "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
   fi
   sleep 0.2
 done
