@@ -42,8 +42,11 @@ def write_kryoflux_stream(
     rev_lengths: List[int] | None = None,
     header_mode: str = 'ascii',
     include_sck_oob: bool = True,
-    include_initial_index: bool = True,
+    include_initial_index: bool = False,
     ick_hz: float = 3000000.0,
+    include_kf_version_info: bool = True,
+    include_clock_info: bool = True,
+    include_hw_info: bool = False,
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream with spec-compliant ISB and OOB blocks.
@@ -122,21 +125,28 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream starting with KFInfo (Type 0x04). Emit two strings to mirror typical device output.
+    # Build stream starting with KFInfo (Type 0x04).
     stream = bytearray()
-    now = datetime.now()
-    host_date = now.strftime('%Y.%m.%d')
-    host_time = now.strftime('%H:%M:%S')
-    dev_date = now.strftime('%b %d %Y')  # e.g., "Mar 19 2011"
-    dev_time = now.strftime('%H:%M:%S')
-    info_txt1 = (
-        f"host_date={host_date}, host_time={host_time}, name=KryoFlux DiskSystem, "
-        f"version={version}, date={dev_date}, time={dev_time}, hwid=1, hwrv=1\x00"
-    )
-    # Use higher precision for clocks to mirror examples in the reference doc
-    info_txt2 = f"sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}\x00"
-    stream.extend(oob_block(0x04, info_txt1.encode('ascii')))
-    stream.extend(oob_block(0x04, info_txt2.encode('ascii')))
+    # 1) Version info as KFInfo (recommended to appear first after preamble)
+    if include_kf_version_info:
+        vtxt = f"KryoFlux stream - version {version}\x00"
+        stream.extend(oob_block(0x04, vtxt.encode('ascii')))
+    # 2) Clock info as KFInfo (optional but commonly present)
+    if include_clock_info:
+        ctxt = f"sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}\x00"
+        stream.extend(oob_block(0x04, ctxt.encode('ascii')))
+    # 3) Extended HW info as KFInfo (only when explicitly enabled)
+    if include_hw_info:
+        now = datetime.now()
+        host_date = now.strftime('%Y.%m.%d')
+        host_time = now.strftime('%H:%M:%S')
+        dev_date = now.strftime('%b %d %Y')  # e.g., "Mar 19 2011"
+        dev_time = now.strftime('%H:%M:%S')
+        itxt = (
+            f"host_date={host_date}, host_time={host_time}, name=KryoFlux DiskSystem, "
+            f"version={version}, date={dev_date}, time={dev_time}, hwid=1, hwrv=1\x00"
+        )
+        stream.extend(oob_block(0x04, itxt.encode('ascii')))
     # Optional initial index marker at start-of-stream (counters at 0)
     # Using full 12-byte payload per spec (LE32: StreamPosition, SampleCounter, IndexCounter)
     isb_bytes = 0

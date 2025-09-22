@@ -185,7 +185,13 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--sck-hz", type=float, default=24_000_000.0, help="Sample clock for C2 stream (Hz, default 24 MHz)")
     ap.add_argument("--header-mode", choices=["ascii", "oob"], default="ascii", help="File header style: ascii preamble or start with OOB info (default ascii)")
     ap.add_argument("--no-sck-oob", action="store_true", help="DEPRECATED: Ignored (Type 0x08 Sample Clock OOB is not emitted)")
-    ap.add_argument("--no-initial-index", action="store_true", help="Do not emit an initial OOB index marker at start")
+    # Initial index handling: default is OFF for compatibility
+    ap.add_argument("--initial-index", action="store_true", help="Emit an initial OOB index marker at start (default off)")
+    ap.add_argument("--no-initial-index", action="store_true", help="DEPRECATED: same as default; prefer --initial-index to enable")
+    # KFInfo toggles
+    ap.add_argument("--no-kf-version-info", action="store_true", help="Do not emit KFInfo 'KryoFlux stream - version ...' string")
+    ap.add_argument("--no-clock-info", action="store_true", help="Do not emit KFInfo 'sck=..., ick=...' string")
+    ap.add_argument("--hw-info", action="store_true", help="Emit extended HW info KFInfo (host_date, name, hwid, etc.)")
     ap.add_argument("--ick-hz", type=float, default=3003428.5714, help="Index clock frequency (Hz) for OOB counters (default ~3.003 MHz)")
     ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7"], default="constant")
     ap.add_argument("--interval-ns", type=int, default=4000, help="Constant/ones cell interval (ns)")
@@ -241,8 +247,11 @@ def main(argv: List[str]) -> int:
                 rev_lengths=rev_lens,
                 header_mode=str(args.header_mode),
                 include_sck_oob=(not args.no_sck_oob),
-                include_initial_index=(not args.no_initial_index),
+                include_initial_index=(True if args.initial_index and not args.no_initial_index else False),
                 ick_hz=float(args.ick_hz),
+                include_kf_version_info=(not args.no_kf_version_info),
+                include_clock_info=(not args.no_clock_info),
+                include_hw_info=bool(args.hw_info),
             )
 
     print(f"Generated {len(tracks)*len(sides)} files in {out_dir}")
