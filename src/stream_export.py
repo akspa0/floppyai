@@ -96,13 +96,9 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream
+    # Build stream that begins with an OOB info block (type=4)
     stream = bytearray()
-    # ASCII preamble (null-terminated) to help tools recognize the stream
-    pre_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
-    preamble = pre_txt.encode('ascii', errors='ignore') + b"\x00"
-    # Also include an OOB info block (type=4)
-    info_txt = f"KryoFlux stream, sck={sck_hz}, track={track}, side={side}"
+    info_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
 
     pos = 0
@@ -124,10 +120,7 @@ def write_kryoflux_stream(
     stream.extend(oob_block(3))
 
     with open(p, 'wb') as f:
-        # Write ASCII preamble, a few NOP bytes for alignment, then the C2/OOB stream
-        f.write(preamble)
-        # Optional NOP alignment (c2eNop2 twice)
-        f.write(b"\x09\x09")
+        # Write pure C2/OOB stream starting with OOB info
         f.write(stream)
     try:
         print(f"Wrote KryoFlux C2 stream: track={track} side={side} sck={sck_hz} Hz -> {p}")
