@@ -7,3 +7,4 @@ openai>=1.0.0  # For LM Studio API integration (OpenAI-compatible)
 # AI/ML deps:
 scikit-learn>=1.0.0
 torch>=1.12.0
+Pillow>=10.0.0

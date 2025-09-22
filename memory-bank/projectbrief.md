@@ -7,13 +7,13 @@ FloppyAI analyzes KryoFlux raw flux streams to understand and visualize the magn
 - The monolithic CLI needed refactoring to promote modularity, reuse, and maintainability.
 
 ## Goals
-- Modular CLI with subcommands under `FloppyAI/src/` wired via `main.py`.
+- Modular CLI with subcommands under `src/` wired via `main.py`.
 - High‑quality visuals and metrics from flux data (no filesystem assumptions).
 - Reproducible CLI and outputs that default to timestamped directories but accept `--output-dir` overrides.
 - Experiments framework to generate/write/capture/analyze extreme streams.
 
 ## Success Criteria
-- Run all commands from repo root: `python -m FloppyAI.src.main`.
+- Run all commands from the `FloppyAI/` directory: `python -m src.main`.
 - `main.py` delegates to modules: `cmd_stream_ops.py`, `cmd_corpus.py`, `cmd_diff.py`, and future `cmd_experiments.py`.
 - JSON I/O goes through `utils/json_io.py` (`dump_json`) with a consistent encoder.
 - Docs: README, usage guide, cheatsheet, and experiments docs are up to date and cross‑linked.
