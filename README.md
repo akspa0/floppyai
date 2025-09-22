@@ -52,14 +52,14 @@ chmod +x FloppyAI/scripts/linux/experiment_write_read_analyze.sh
   --tracks 0-80 --sides 0,1 --revs 3 --drive 0 \
   --label hd35_prbs7_full \
   --pattern prbs7 --long-ns 4200 --short-ns 2200 --seed 123 \
-  --sck-hz 24000000.0 --header-mode ascii \
+  --sck-hz 24027428.5714285 \
   --sanity
 ```
 
 Notes:
 - `--tracks 0-80` is the standard full range for 3.5" HD. If you want overtracks, use `0-82`.
-- `--header-mode ascii` produces a null‑terminated ASCII preamble for broader tool compatibility; if HxC complains, re‑run with `--header-mode oob`.
-- The script attempts to write streams via DTC using STREAM mode (`-i0 -w`, with `-f` prefix first) and then reads back captures (`-i0`). As of 2025‑09‑22, DTC refuses to open generated STREAM files on our test host; see status section below. Outputs and logs are stored under `FloppyAI/output_captures/experiments/<label>/`.
+- Streams now default to OOB‑first with the version KFInfo at byte 0. You do not need to pass a header flag; ASCII preamble is supported but not recommended.
+- The script attempts to write streams via DTC using STREAM mode (`-i0 -w`, with `-f` prefix first) and then reads back captures (`-i0`). DTC write‑from‑stream validation is pending; outputs and logs are stored under `FloppyAI/output_captures/experiments/<label>/`.
 
 ## How to Run
 
@@ -268,20 +268,16 @@ FloppyAI/scripts/linux/dtc_write_read_set.sh \
 ```
 Details:
 - Accepts sets named `trackNN.S.raw` (e.g., `track00.0.raw`) or `NN.S.raw` (e.g., `00.0.raw`).
-- Attempts STREAM write with `-i0 -w` using `-f` prefix (`-ftrack` or `-f./`) and strict option ordering; read‑back uses `-i0`. As of 2025‑09‑22, DTC rejects generated files for writing; see status section above.
+- Attempts STREAM write with `-i0 -w` using `-f` prefix (`-ftrack` or `-f./`) and strict option ordering; read‑back uses `-i0`. DTC acceptance is being validated on current builds.
 - Produces captures and a `.log` in `--out-dir` with the exact `dtc` commands used. Sudo is used by default (pass `--no-sudo` to disable).
 
 ## Current Status: KryoFlux STREAM writing
 
-- We generate STREAM files (C2 + OOB) per the published protocol. HxC opens and visualizes them (side 0 shows rough flux; side 1 may be sparse depending on pattern), but DTC currently refuses to open them for writing and reports:
-  - `Image name:` / `Can't open image file:`
-- We strictly adhere to DTC CLI ordering (e.g., `-ftrack` or `-f./` first, then `-i0`, `-d`, `-s`, `-e`, `-g`, `-w`) and have tried base variants (`-ftrack`, `-ftrack.raw`, absolute `-f$(pwd)/track`, `-f$(pwd)/track.raw`).
-- Action plan (in progress):
-  - Compare our streams against known‑good DTC captures (same track/side) and align OOB/header exactly to the rev 1.1 spec and empirical DTC expectations (index OOB timer payload included).
-  - Document tested variants and capture results under `docs/`.
-  - Update the exporter once the exact accepted shape is confirmed.
+- We generate STREAM files (C2 + OOB) per the published protocol. HxC opens and visualizes our generated streams by default with OOB‑first headers (first OOB is KFInfo: `KryoFlux stream - version 3.50`).
+- DTC write‑from‑stream (`-i0 -w`) is being validated; ensure the `-f` prefix points to the base `.../track` and sets are named `trackNN.S.raw`. We will publish confirmed command lines and notes once validation completes.
+- We adhere to strict CLI ordering (e.g., `-ftrack` first, then `-i0`, options, `-w`).
 
-If you are experimenting today, write with HxC (or convert to a format DTC will accept for writing) and use DTC for read‑back captures (`-i0`) until this is resolved.
+Until DTC validation is complete, use HxC for quick playback/inspection and DTC for read‑back captures (`-i0`).
 
 ## Commands
 

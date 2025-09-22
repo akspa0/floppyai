@@ -61,6 +61,14 @@ This document captures architecture, design decisions, and recurring patterns us
 - New experiment subcommand uses subprocess orchestration: `python -m FloppyAI.src.main experiment matrix` runs generate→write→read→analyze cycles.
 - Safety defaults: experiments prefer `--simulate` mode and outer tracks (0-9) to minimize hardware risk.
 
+### KryoFlux Stream Exporter Defaults
+
+- Default header mode: OOB-first. The first OOB at byte 0 is KFInfo with the ASCII text `KryoFlux stream - version 3.50` (no trailing NUL).
+- StreamInfo (0x01): emitted initially (StreamPosition=0, TransferTimeMs=0) and periodically. The payload `StreamPosition` equals the actual ISB byte count at the moment of insertion.
+- Index (0x02): emitted at revolution boundaries only; no initial index by default. Counters are computed using `sck_hz=24027428.5714285` and `ick_hz=3003428.5714285625`.
+- StreamEnd (0x03) then EOF (0x0D with size 0x0D0D) conclude the stream.
+- KFInfo hardware/clock strings are disabled by default to maximize compatibility (can be enabled later if required by specific tools).
+
 ### Hardware Orchestration (Cross‑Machine)
 
 - DTC is operated on a Linux host with sudo; we do not wrap or orchestrate it cross‑machine from the Windows environment.

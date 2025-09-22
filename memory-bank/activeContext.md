@@ -1,37 +1,27 @@
 # Active Context — FloppyAI
 
-Last updated: 2025-09-22 03:41 (local)
+Last updated: 2025-09-22 16:40 (local)
 
 ## Current Focus
-- STREAM write investigation: DTC currently refuses to open generated STREAM files for writing (`Image name:` / `Can't open image file:`) despite strict CLI ordering and multiple `-f` base variants. HxC can visualize Side 0; Side 1 may be sparse depending on pattern.
-- Short‑term objective: Gather known‑good reference STREAMs via DTC capture and align our exporter (OOB/header) to protocol rev 1.1 and empirical DTC expectations.
-- Maintain forensic‑rich capture defaults and logging.
+- Finalize STREAM exporter defaults that are accepted by tools. HxC now loads our generated streams by default (OOB‑first, version KFInfo at byte 0).
+- Next: validate DTC write‑from‑stream acceptance (`-i0 -w`) using proper `-f` prefix and a small track set.
+- Keep the end‑user flow simple: no flags required to generate valid streams.
 
 ## Recent Changes
-- STREAM exporter updated (`src/stream_export.py`) to match KryoFlux spec more closely:
-  - ISB encoding now uses Flux1 (0x0E..0xFF), Flux2 (0x00..0x07 + 1 byte), Flux3 (0x0C + MSB then LSB), and OVL16 (0x0B) correctly. 0x0C byte order fixed to MSB-first.
-  - OOB blocks now spec-compliant:
-    - KFInfo (type 0x04): ASCII `sck=..., ick=...\0`.
-    - Index (type 0x02): 12-byte LE payload {StreamPosition, SampleCounter, IndexCounter}.
-    - StreamEnd (type 0x03): 8-byte LE payload {StreamPosition, ResultCode=0}.
-    - EOF (type 0x0D): size 0x0D0D.
-  - Added `ick_hz` parameter; we compute counters and track ISB byte positions while encoding.
-  - Removed non-spec OOB type 0x08 usage; ASCII preamble remains optional but default header is OOB-first.
-- Generator updated (`tools/patterns_to_stream_set.py`): defaults to `--header-mode oob` and threads `--ick-hz` through to the exporter.
-- New probe tool added: `tools/kfx_probe.py` dumps OOB blocks, ISB opcode histogram, and basic integrity/EOF checks for STREAM files.
-- Linux DTC scripts updated:
-  - Write attempts use STREAM mode `-i0 -w` with `-f` prefix first and multiple base fallbacks (`track`, `track.raw`, absolute forms).
-  - Read uses `-i0`.
-  - Improved logs show exact commands attempted.
-- Docs updated:
-  - README adds “KryoFlux STREAM writing status”.
-  - New docs: `docs/kryoflux_stream_notes.md`, `docs/stream_write_investigation.md`.
+- STREAM exporter (`src/stream_export.py`):
+  - Default OOB‑first header; first OOB at byte 0 is KFInfo: `KryoFlux stream - version 3.50` (no trailing NUL).
+  - StreamInfo (0x01) emitted initially (SP=0, ms=0) and periodically, with payload SP equal to actual ISB bytes at insertion.
+  - Index (0x02) per revolution; no initial index by default. Counters computed from `sck_hz=24,027,428.5714285` and `ick_hz=3,003,428.5714285625`.
+  - StreamEnd then EOF sentinel.
+  - KFInfo hardware/clock strings disabled by default (can be enabled if needed later).
+- Generator (`tools/patterns_to_stream_set.py`): defaults to `--header-mode oob`, `--version-string 3.50`.
+- Probe (`tools/kfx_probe.py`): recognizes EOF sentinel cleanly and stops at EOF.
+- Docs updated: `docs/kryoflux_stream_notes.md` aligned to the finalized defaults.
 
 ## Next Steps
-- Capture reference STREAMs via DTC (`-i0`) for a small set of tracks/sides (e.g., 00.0, 00.1).
-- Use `tools/kfx_probe.py` to compare reference vs generated (OOB layout, ISB histograms, counters/positions).
-- Align any remaining header/order nuances observed in references; then re‑test a minimal DTC write (`-i0 -w`).
-- Update docs to finalize the accepted header/OOB shape and remove temporary toggles.
+- Validate DTC write‑from‑stream (`-i0 -w`) on a small set: ensure `-f` prefix points to `.../track` and that files are `trackNN.S.raw`.
+- If DTC needs additional KFInfo (e.g., clocks), add after initial StreamInfo and re‑validate without regressing HxC.
+- Update Linux script docs with confirmed DTC command lines and add a safety note.
 
 ## Open Decisions
 - Whether to expose a user knob for instability contrast percentile; currently hard‑coded to a sensible default.

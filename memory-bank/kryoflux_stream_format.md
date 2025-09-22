@@ -16,27 +16,26 @@ All OOB blocks start with a 4‑byte header: 0x0D, Type, Size (LE16), followed b
 
 Types we emit:
 - 0x04 — KFInfo (ASCII):
-  - Payload: a null-terminated string like `"sck=24027428.5714285, ick=3003428.5714285625\0"`.
-  - Purpose: communicates sample clock (SCK) and index clock (ICK) used to interpret counters.
+  - First OOB at byte 0: "KryoFlux stream - version {version}" with NO trailing NUL (size equals ASCII length).
+  - Additional KFInfo strings (e.g., clocks, hardware) are disabled by default for maximum compatibility.
 - 0x02 — Index (12 bytes):
   - Payload: three LE32 fields: `StreamPosition`, `SampleCounter`, `IndexCounter`.
   - `StreamPosition`: ISB byte position at the index moment (i.e., where the next flux byte would be written/read).
   - `SampleCounter`: number of SCK ticks elapsed at the index moment.
   - `IndexCounter`: number of ICK cycles elapsed at the index moment.
-  - Placement: emitted at each revolution boundary; optional initial one at start (all zeroes).
 - 0x03 — StreamEnd (8 bytes):
   - Payload: two LE32 fields: `StreamPosition`, `ResultCode` (0=success).
   - `StreamPosition`: total ISB byte count at transfer end.
 - 0x01 — StreamInfo (8 bytes, optional):
   - Payload: two LE32 fields: `StreamPosition`, `TransferTimeMs`.
-  - Not emitted by default.
+  - Emitted by default: initial block with (0,0) and periodic thereafter. Payload `StreamPosition` equals the actual ISB byte position at the moment the OOB is inserted.
 - 0x0D — EOF:
   - Size is set to 0x0D0D; there is no payload beyond the header.
 
 ## File Layout (Default)
-1) KFInfo (0x04)
-2) Optional Index (0x02) at start with zero counters
-3) ISB flux stream for N revolutions
+1) KFInfo (0x04) at byte 0: "KryoFlux stream - version {version}"
+2) StreamInfo (0x01): initial (StreamPosition=0, TransferTimeMs=0)
+3) ISB flux stream for N revolutions (with periodic StreamInfo OOBs; payload SP = actual insertion SP)
    - After each revolution: Index (0x02)
 4) StreamEnd (0x03)
 5) EOF (0x0D)
@@ -52,5 +51,5 @@ Types we emit:
 - Iterate header/order subtleties to match DTC expectations before re-testing write-from-stream (`-i0 -w`).
 
 ## Notes
-- We do not emit the non-spec OOB type 0x08 (sample clock). KFInfo (0x04) conveys clocks as ASCII.
-- ASCII preamble (legacy) is supported but off by default; we prefer OOB-first headers.
+- We do not emit the non-spec OOB type 0x08 (sample clock).
+- ASCII preamble (legacy) is supported but OFF by default; we prefer OOB-first headers with the version KFInfo at byte 0.
