@@ -71,6 +71,16 @@ Outputs go to: `test_outputs/<timestamp>/silkscreen/my_image_hd/` with the same 
 - `--disk-name`: Subfolder label under the selected output directory.
 - Pattern-specific options (for `silkscreen_pattern`): `--k`, `--duty`, `--theta-period`, `--radial-period`.
 
+### Profiles and sck
+
+- Profiles (JSON under `FloppyAI/profiles/`) provide friendly defaults for RPM, safe track limits, analyzer thresholds, and overlay hints.
+  - Pass `--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR|auto`.
+  - If neither `--profile` nor `--rpm` is given, the CLI defaults to `RPM=300.0` and prints a warning.
+- sck (sample clock) is the KryoFlux device sampling frequency embedded in streams; it is not the disk RPM and not a “clock track”.
+  - Streams written here include an OOB info block with `sck=…` when generating C2/OOB streams.
+  - The analyzer logs detected `sck_hz` per file and includes it in results (`stats.decoder_sck_hz` and `sck_hz`).
+  - Generation/writing is RPM‑agnostic at the file format level; RPM only affects how many transitions are targeted per revolution when generating synthetic content.
+
 Notes:
 - Both sides are emitted for every track. The non-pattern side is a uniform ("blank") flux stream matching the timing constraints so downstream tooling always has files for both sides.
 
@@ -120,6 +130,17 @@ Forensic-rich read-back capture (example: 16 revolutions per track, side 0 and 1
 
 sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-81 -s 0
 sudo dtc -i0 -f /path/to/captures/wedges_test/track -r 16 -t 0-81 -s 1
+
+Note on dtc variants:
+- Some dtc builds require compact flags (no spaces) and do not accept a path with `-f`.
+  - In that case, `cd` into the target directory and use `-ftrack` with no space.
+  - Example:
+    ```bash
+    mkdir -p /path/to/captures/wedges_test && cd /path/to/captures/wedges_test
+    sudo dtc -i0 -p -t0-81 -s0 -r16 -ftrack
+    sudo dtc -i0 -p -t0-81 -s1 -r16 -ftrack
+    ```
+  - To verify dtc version: `dtc -V`
 ```
 
 Recommendations:
