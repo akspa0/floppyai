@@ -229,14 +229,14 @@ for entry in "${SORTED[@]}"; do
         echo "[ERROR] Missing expected file for t=$t s=$s: $expected" | tee -a "$LOG_PATH"
         continue
       fi
-      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i0 -d${DRIVE} -s${t} -e${t} -g${s} -w"
       echo "[WRITE] $LOG_CMD"
       echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
       if [[ $DRY_RUN -eq 1 ]]; then continue; fi
       if [[ $USE_SUDO -eq 1 ]]; then
-        sudo "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+        sudo "$DTC_BIN" -f"$PREFIX" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
       else
-        "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+        "$DTC_BIN" -f"$PREFIX" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
       fi
       ;;
     perfile)
@@ -245,14 +245,14 @@ for entry in "${SORTED[@]}"; do
         echo "[ERROR] Missing file: $base.raw" | tee -a "$LOG_PATH"
         continue
       fi
-      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${base} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${base} -i0 -d${DRIVE} -s${t} -e${t} -g${s} -w"
       echo "[WRITE] $LOG_CMD"
       echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
       if [[ $DRY_RUN -eq 1 ]]; then continue; fi
       if [[ $USE_SUDO -eq 1 ]]; then
-        sudo "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+        sudo "$DTC_BIN" -f"$base" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
       else
-        "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+        "$DTC_BIN" -f"$base" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
       fi
       ;;
     *)

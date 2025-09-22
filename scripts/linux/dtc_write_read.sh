@@ -182,19 +182,68 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-# Execute write
-if [[ -n "$WRITE_PREFIX" ]]; then
+# Execute write with fallbacks. Try up to 4 base variants; stop on first success.
+attempt_write() {
+  local base="$1"
+  local cmd="${SUDO_PREFIX}${DTC_BIN} -f${base} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w"
+  echo "[WRITE] $cmd" | tee -a "$LOG_PATH"
   if [[ $USE_SUDO -eq 1 ]]; then
-    sudo "$DTC_BIN" -f"$WRITE_PREFIX" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+    sudo "$DTC_BIN" -f"$base" -i0 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
   else
-    "$DTC_BIN" -f"$WRITE_PREFIX" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+    "$DTC_BIN" -f"$base" -i0 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+  fi
+  return $?
+}
+
+ABS_DIR="$(pwd)"
+TRIED_Bases=()
+RC=1
+if [[ -n "$WRITE_PREFIX" ]]; then
+  # 1) detected prefix (track or ./)
+  TRIED_Bases+=("$WRITE_PREFIX")
+  attempt_write "$WRITE_PREFIX"; RC=$?
+  if [[ $RC -ne 0 ]]; then
+    # 2) suffix with .raw
+    if [[ "$WRITE_PREFIX" == "track" ]]; then
+      TRIED_Bases+=("track.raw")
+      attempt_write "track.raw"; RC=$?
+    else
+      TRIED_Bases+=("./.raw")
+      attempt_write "./.raw"; RC=$?
+    fi
+  fi
+  if [[ $RC -ne 0 ]]; then
+    # 3) absolute path prefix
+    if [[ "$WRITE_PREFIX" == "track" ]]; then
+      TRIED_Bases+=("$ABS_DIR/track")
+      attempt_write "$ABS_DIR/track"; RC=$?
+    else
+      TRIED_Bases+=("$ABS_DIR/")
+      attempt_write "$ABS_DIR/"; RC=$?
+    fi
+  fi
+  if [[ $RC -ne 0 ]]; then
+    # 4) absolute path with .raw suffix
+    if [[ "$WRITE_PREFIX" == "track" ]]; then
+      TRIED_Bases+=("$ABS_DIR/track.raw")
+      attempt_write "$ABS_DIR/track.raw"; RC=$?
+    else
+      TRIED_Bases+=("$ABS_DIR/.raw")
+      attempt_write "$ABS_DIR/.raw"; RC=$?
+    fi
   fi
 else
-  if [[ $USE_SUDO -eq 1 ]]; then
-    sudo "$DTC_BIN" -f"$PERFILE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
-  else
-    "$DTC_BIN" -f"$PERFILE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
-  fi
+  # Per-file base fallback
+  TRIED_Bases+=("$PERFILE_BASE")
+  attempt_write "$PERFILE_BASE"; RC=$?
+fi
+
+if [[ $RC -ne 0 ]]; then
+  echo "[ERROR] DTC write failed for all base variants: ${TRIED_Bases[*]}" | tee -a "$LOG_PATH"
+  echo "[PWD] $(pwd)" | tee -a "$LOG_PATH"
+  ls -l | tee -a "$LOG_PATH"
+  popd >/dev/null
+  exit $RC
 fi
 popd >/dev/null
 

@@ -40,6 +40,8 @@ def write_kryoflux_stream(
     sck_hz: float = 24000000.0,
     rev_lengths: List[int] | None = None,
     header_mode: str = 'oob',
+    include_sck_oob: bool = True,
+    include_initial_index: bool = True,
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
@@ -108,23 +110,25 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream that begins with sample clock OOB (type=8) and an OOB info block (type=4)
+    # Build stream that begins with optional sample clock OOB (type=8) and an OOB info block (type=4)
     stream = bytearray()
-    try:
-        sck_u32 = int(round(float(sck_hz))) & 0xFFFFFFFF
-        stream.extend(oob_block(8, struct.pack('<I', sck_u32)))
-    except Exception:
-        pass
+    if include_sck_oob:
+        try:
+            sck_u32 = int(round(float(sck_hz))) & 0xFFFFFFFF
+            stream.extend(oob_block(8, struct.pack('<I', sck_u32)))
+        except Exception:
+            pass
     info_txt = f"KryoFlux stream - version {version}\x00"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
     # Initial index marker at start-of-stream
-    stream.extend(oob_block(2))
+    if include_initial_index:
+        stream.extend(oob_block(2, struct.pack('<H', 0)))
 
     pos = 0
     for i, cnt in enumerate(splits):
         if cnt <= 0:
-            # Still write an index for an empty revolution
-            stream.extend(oob_block(2))
+            # Still write an index for an empty revolution (timer=0)
+            stream.extend(oob_block(2, struct.pack('<H', 0)))
             continue
         rev = intervals[pos:pos+cnt]
         pos += cnt
@@ -132,8 +136,8 @@ def write_kryoflux_stream(
         for ns_val in rev:
             t = ns_to_ticks(int(ns_val))
             stream.extend(encode_ticks(t))
-        # OOB index marker
-        stream.extend(oob_block(2))
+        # OOB index marker with timer payload (0 for now)
+        stream.extend(oob_block(2, struct.pack('<H', 0)))
 
     # OOB stream end
     stream.extend(oob_block(3))
