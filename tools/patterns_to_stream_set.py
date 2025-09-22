@@ -224,8 +224,8 @@ def main(argv: List[str]) -> int:
                 )
                 intervals.extend(part)
                 rev_lens.append(len(part))
-            # Write NN.S.raw (provide exact per-rev lengths to align OOB indices)
-            fname = f"{t:02d}.{int(s)}.raw"
+            # Write trackNN.S.raw (provide exact per-rev lengths to align OOB indices)
+            fname = f"track{t:02d}.{int(s)}.raw"
             fpath = out_dir / fname
             write_kryoflux_stream(
                 intervals,

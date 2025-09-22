@@ -130,10 +130,19 @@ mapfile -t ALL_FILES < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name "*.raw" | s
 CANDIDATES=()
 for f in "${ALL_FILES[@]}"; do
   base=$(basename "$f")
+  # Match NN.S.raw
   if [[ "$base" =~ ^([0-9]{2})\.([01])\.raw$ ]]; then
     t=${BASH_REMATCH[1]}
     s=${BASH_REMATCH[2]}
     CANDIDATES+=("$((10#$t)):$s:$f")
+    continue
+  fi
+  # Match trackNN.S.raw
+  if [[ "$base" =~ ^track([0-9]{2})\.([01])\.raw$ ]]; then
+    t=${BASH_REMATCH[1]}
+    s=${BASH_REMATCH[2]}
+    CANDIDATES+=("$((10#$t)):$s:$f")
+    continue
   fi
 done
 
@@ -172,19 +181,29 @@ unset IFS
 {
   echo "dtc_write_read_set.sh run at $(date -Iseconds)"
   echo "dtc path: $(command -v "$DTC_BIN" || echo "$DTC_BIN")"
-  echo "dtc version:"
-  $DTC_BIN -V || true
-  echo
   echo "Image dir: $IMAGE_DIR"
   echo "Files to write: ${#SORTED[@]}"
 } >"$LOG_PATH"
 
 pushd "$IMAGE_DIR" >/dev/null
-# Write all (use write-from-stream set type: -wi4, compact flags, base name without extension)
+
+# Determine dtc prefix expected by image type 4
+PREFIX="./"
+if [[ ${#SORTED[@]} -gt 0 ]]; then
+  IFS=':' read -r t0 s0 p0 <<<"${SORTED[0]}"
+  b0=$(basename "$p0")
+  if [[ "$b0" =~ ^track[0-9]{2}\.[01]\.raw$ ]]; then
+    PREFIX="track"
+  else
+    PREFIX="./"
+  fi
+fi
+echo "Using dtc prefix: $PREFIX" | tee -a "$LOG_PATH"
+
+# Write all (use write-from-stream: -i4 with -w); dtc will append NN.S.raw to PREFIX
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
-  base=$(printf "%02d.%d" "$t" "$s")
-  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${base} -wi4 -d${DRIVE} -s${t} -e${t} -g${s} -w")
+  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w")
   echo "[WRITE] ${CMD[*]}"
   echo "[WRITE] ${CMD[*]}" >>"$LOG_PATH"
   if [[ $DRY_RUN -eq 1 ]]; then continue; fi
