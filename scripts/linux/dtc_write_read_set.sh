@@ -46,6 +46,8 @@ DTC_BIN="/usr/bin/dtc"
 TRACKS_SPEC=""
 SIDES_SPEC="0,1"
 REVS=3
+# Write strategy: 'prefix' (dtc appends NN.S.raw to -f base) or 'perfile' (-f is full base like trackNN.S)
+WRITE_MODE="prefix"
 # Resolve script directory for repo-relative default output
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../../output_captures"
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --revs) REVS=${2:?}; shift 2;;
     --out-dir) OUT_DIR=${2:?}; shift 2;;
     --read-back) READ_BACK=1; shift 1;;
+    --write-mode) WRITE_MODE=${2:?}; shift 2;;
     --no-sudo) USE_SUDO=0; shift 1;;
     --dry-run) DRY_RUN=1; shift 1;;
     -h|--help) usage; exit 0;;
@@ -123,7 +126,7 @@ parse_sides() {
   echo "$spec" | tr ',' '\n'
 }
 
-# Build list of NN.S.raw files, optionally filter tracks/sides
+# Build list of *.raw files, optionally filter tracks/sides
 mapfile -t ALL_FILES < <(find "$IMAGE_DIR" -maxdepth 1 -type f -name "*.raw" | sort)
 
 # Extract candidates as "T:S:path"
@@ -187,19 +190,75 @@ unset IFS
 
 pushd "$IMAGE_DIR" >/dev/null
 
-# Write all using per-file base names (e.g., 00.0 or track00.0) so dtc resolves <base>.raw
+# Determine prefix if using prefix mode
+PREFIX=""
+if [[ "$WRITE_MODE" == "prefix" ]]; then
+  if [[ ${#SORTED[@]} -gt 0 ]]; then
+    IFS=':' read -r _ _ p0 <<<"${SORTED[0]}"
+    b0=$(basename "$p0")
+    if [[ "$b0" =~ ^track[0-9]{2}\.[01]\.raw$ ]]; then
+      PREFIX="track"
+    elif [[ "$b0" =~ ^[0-9]{2}\.[01]\.raw$ ]]; then
+      PREFIX="./"
+    else
+      echo "[WARN] Unrecognized naming for '$b0'; falling back to perfile mode" | tee -a "$LOG_PATH"
+      WRITE_MODE="perfile"
+    fi
+  else
+    echo "[ERROR] No .raw files found after filtering." | tee -a "$LOG_PATH"
+    popd >/dev/null
+    exit 2
+  fi
+  echo "Using dtc prefix: $PREFIX (write-mode=$WRITE_MODE)" | tee -a "$LOG_PATH"
+else
+  echo "Using per-file base write mode" | tee -a "$LOG_PATH"
+fi
+
+# Write all
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
-  base=$(basename "$p" .raw)
-  LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${base} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
-  echo "[WRITE] $LOG_CMD"
-  echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
-  if [[ $DRY_RUN -eq 1 ]]; then continue; fi
-  if [[ $USE_SUDO -eq 1 ]]; then
-    sudo "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
-  else
-    "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
-  fi
+  case "$WRITE_MODE" in
+    prefix)
+      # Validate the expected file exists for this t/s
+      if [[ "$PREFIX" == "track" ]]; then
+        expected=$(printf "track%02d.%d.raw" "$t" "$s")
+      else
+        expected=$(printf "%02d.%d.raw" "$t" "$s")
+      fi
+      if [[ ! -f "$expected" ]]; then
+        echo "[ERROR] Missing expected file for t=$t s=$s: $expected" | tee -a "$LOG_PATH"
+        continue
+      fi
+      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+      echo "[WRITE] $LOG_CMD"
+      echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
+      if [[ $DRY_RUN -eq 1 ]]; then continue; fi
+      if [[ $USE_SUDO -eq 1 ]]; then
+        sudo "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+      else
+        "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+      fi
+      ;;
+    perfile)
+      base=$(basename "$p" .raw)
+      if [[ ! -f "$base.raw" ]]; then
+        echo "[ERROR] Missing file: $base.raw" | tee -a "$LOG_PATH"
+        continue
+      fi
+      LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${base} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+      echo "[WRITE] $LOG_CMD"
+      echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
+      if [[ $DRY_RUN -eq 1 ]]; then continue; fi
+      if [[ $USE_SUDO -eq 1 ]]; then
+        sudo "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+      else
+        "$DTC_BIN" -f"$base" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+      fi
+      ;;
+    *)
+      echo "[ERROR] Unknown WRITE_MODE: $WRITE_MODE" | tee -a "$LOG_PATH"; exit 2;
+      ;;
+  esac
   sleep 0.2
 done
 popd >/dev/null
