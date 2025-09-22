@@ -42,18 +42,21 @@ def write_kryoflux_stream(
     header_mode: str = 'oob',
     include_sck_oob: bool = True,
     include_initial_index: bool = True,
+    ick_hz: float = 3000000.0,
 ) -> None:
     """
-    Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
+    Write a KryoFlux C2/OOB stream with spec-compliant ISB and OOB blocks.
     Layout:
-      - OOB info block with ASCII text including 'KryoFlux' and sck=
-      - Encoded sample stream (C2) of tick counts converted from ns
-      - OOB index (type=2) after each revolution
-      - OOB stream end (type=3)
-    Encoding rules (aligned to our parser in flux_analyzer.py):
-      - small sample: 0x00, then 1 byte 0..0x0D for 0..13 ticks
-      - single byte sample: 0x0E..0xFF for 14..255 ticks
-      - overflow: repeat 0x0B to add 65536 per occurrence, then 0x0C + uint16 LE sample for remaining 0..65535
+      - OOB KFInfo (type=0x04): ASCII "sck=..., ick=...\0"
+      - Encoded ISB flux blocks (C2 timing values in sample ticks)
+      - OOB Index (type=0x02, 12-byte LE payload) after each revolution boundary
+      - OOB StreamEnd (type=0x03, 8-byte LE payload)
+      - OOB EOF (type=0x0D, size=0x0D0D)
+    ISB encoding rules:
+      - Flux1: 0x0E..0xFF (1 byte) => value = header (14..255)
+      - Flux2: 0x00..0x07 + 1 byte => value = (header<<8) + value1 (0..0x7FF)
+      - Flux3: 0x0C + 2 bytes => value = (value1<<8) + value2 (MSB then LSB)
+      - Ovl16: 0x0B adds 0x10000 to the next flux block; emit repeats as needed for very large values
     """
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -63,32 +66,40 @@ def write_kryoflux_stream(
 
     def encode_ticks(ticks: int) -> bytes:
         """
-        KryoFlux C2 sample encoding (commonly accepted by tools):
-          - 0..13 ticks:  0x00, <byte:0..13>
-          - 14..255:     <single byte: 0x0E..0xFF>
-          - >=256:       0x0B repeated (adds 65536 each), then 0x0C + uint16 LE
+        Encode a single flux interval (in sample ticks) into KryoFlux C2 ISB blocks.
+        Spec mapping:
+          - Flux1: 0x0E..0xFF for values 14..255
+          - Flux2: 0x00..0x07, then one byte => (hdr<<8)+val (0..0x7FF)
+          - Flux3: 0x0C, then two bytes => (b1<<8)+b2 (MSB then LSB) for 0x0800..0xFFFF
+          - Ovl16: 0x0B increments the next flux value by 0x10000 per occurrence
         """
         if ticks < 0:
             ticks = 0
         parts = bytearray()
-        # Emit overflow markers in chunks of 65536
+        # Emit overflow markers for values > 0xFFFF
         while ticks > 0xFFFF:
-            parts.append(0x0B)  # c2eOverflow16
-            ticks -= 65536
-        if ticks <= 13:
-            parts.append(0x00)  # small sample prefix
+            parts.append(0x0B)  # Ovl16
+            ticks -= 0x10000
+        if ticks >= 14 and ticks <= 0xFF:
+            # Flux1
             parts.append(ticks & 0xFF)
-        elif ticks <= 255:
-            # Single byte sample. 0x0D is reserved (OOB), but ticks in this branch are 14..255.
-            parts.append(ticks & 0xFF)
+        elif ticks <= 0x7FF:
+            # Flux2
+            hdr = (ticks >> 8) & 0x07
+            val = ticks & 0xFF
+            parts.append(hdr)
+            parts.append(val)
         else:
-            parts.append(0x0C)  # c2eValue16
-            parts.append(ticks & 0xFF)
-            parts.append((ticks >> 8) & 0xFF)
+            # Flux3
+            parts.append(0x0C)
+            b1 = (ticks >> 8) & 0xFF  # MSB
+            b2 = ticks & 0xFF         # LSB
+            parts.append(b1)
+            parts.append(b2)
         return bytes(parts)
 
     def oob_block(typ: int, payload: bytes = b"") -> bytes:
-        # 0x0D, type, size (LE 16), payload
+        # Generic OOB: 0x0D, Type, Size(LE16), Payload
         sz = len(payload)
         return bytes((0x0D, typ, sz & 0xFF, (sz >> 8) & 0xFF)) + payload
 
@@ -110,40 +121,50 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream that begins with optional sample clock OOB (type=8) and an OOB info block (type=4)
+    # Build stream starting with KFInfo (Type 0x04): "sck=..., ick=...\0"
     stream = bytearray()
-    if include_sck_oob:
-        try:
-            sck_u32 = int(round(float(sck_hz))) & 0xFFFFFFFF
-            stream.extend(oob_block(8, struct.pack('<I', sck_u32)))
-        except Exception:
-            pass
-    info_txt = f"KryoFlux stream - version {version}\x00"
-    stream.extend(oob_block(4, info_txt.encode('ascii')))
-    # Initial index marker at start-of-stream
+    info_txt = f"sck={float(sck_hz):.7f}, ick={float(ick_hz):.7f}\x00"
+    stream.extend(oob_block(0x04, info_txt.encode('ascii')))
+    # Optional initial index marker at start-of-stream (counters at 0)
+    # Using full 12-byte payload per spec (LE32: StreamPosition, SampleCounter, IndexCounter)
+    isb_bytes = 0
+    sample_counter = 0  # in sck ticks
+    index_counter = 0   # in ick cycles
     if include_initial_index:
-        stream.extend(oob_block(2, struct.pack('<H', 0)))
+        payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+        stream.extend(oob_block(0x02, payload))
 
     pos = 0
     for i, cnt in enumerate(splits):
         if cnt <= 0:
-            # Still write an index for an empty revolution (timer=0)
-            stream.extend(oob_block(2, struct.pack('<H', 0)))
+            # Still write an index block for an empty revolution
+            payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+            stream.extend(oob_block(0x02, payload))
             continue
         rev = intervals[pos:pos+cnt]
         pos += cnt
         # Encode each ns interval into C2 ticks
         for ns_val in rev:
             t = ns_to_ticks(int(ns_val))
-            stream.extend(encode_ticks(t))
-        # OOB index marker with timer payload (0 for now)
-        stream.extend(oob_block(2, struct.pack('<H', 0)))
+            enc = encode_ticks(t)
+            stream.extend(enc)
+            isb_bytes += len(enc)
+            sample_counter += int(t)
+        # Compute index counter via elapsed seconds * ick_hz
+        elapsed_seconds = float(sample_counter) / float(sck_hz) if sck_hz > 0 else 0.0
+        index_counter = int(round(elapsed_seconds * float(ick_hz)))
+        # OOB Index marker (Type 0x02) with 12-byte payload
+        payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+        stream.extend(oob_block(0x02, payload))
 
-    # OOB stream end
-    stream.extend(oob_block(3))
+    # OOB StreamEnd (Type 0x03): 8-byte payload (LE32 StreamPosition, LE32 ResultCode)
+    stream.extend(oob_block(0x03, struct.pack('<II', int(isb_bytes), 0)))
+    # OOB EOF (Type 0x0D) with size 0x0D0D
+    eof_size = bytes((0x0D, 0x0D))
+    stream.extend(bytes((0x0D, 0x0D)) + eof_size)
 
     with open(p, 'wb') as f:
-        # Header mode: ascii (preamble) or oob (start with OOB info block)
+        # Header mode: ascii (legacy preamble) or oob (KFInfo first)
         if str(header_mode).lower() == 'ascii':
             pre_txt = f"KryoFlux stream - version {version}"
             preamble = pre_txt.encode('ascii', errors='ignore') + b"\x00"

@@ -183,9 +183,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--revs", type=int, default=3, help="Revolutions per file (default 3)")
     ap.add_argument("--rev-time-ns", type=int, default=200_000_000, help="Target revolution time in ns (default ~300RPM)")
     ap.add_argument("--sck-hz", type=float, default=24_000_000.0, help="Sample clock for C2 stream (Hz, default 24 MHz)")
-    ap.add_argument("--header-mode", choices=["ascii", "oob"], default="ascii", help="File header style: ascii preamble or start with OOB info (default ascii)")
+    ap.add_argument("--header-mode", choices=["ascii", "oob"], default="oob", help="File header style: ascii preamble or start with OOB info (default oob)")
     ap.add_argument("--no-sck-oob", action="store_true", help="Do not emit OOB sample clock (type 8)")
     ap.add_argument("--no-initial-index", action="store_true", help="Do not emit an initial OOB index marker at start")
+    ap.add_argument("--ick-hz", type=float, default=3003428.5714, help="Index clock frequency (Hz) for OOB counters (default ~3.003 MHz)")
     ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7"], default="constant")
     ap.add_argument("--interval-ns", type=int, default=4000, help="Constant/ones cell interval (ns)")
     ap.add_argument("--mean-ns", type=float, default=4000.0, help="Random pattern mean interval (ns)")
@@ -241,6 +242,7 @@ def main(argv: List[str]) -> int:
                 header_mode=str(args.header_mode),
                 include_sck_oob=(not args.no_sck_oob),
                 include_initial_index=(not args.no_initial_index),
+                ick_hz=float(args.ick_hz),
             )
 
     print(f"Generated {len(tracks)*len(sides)} files in {out_dir}")
