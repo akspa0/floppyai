@@ -54,7 +54,7 @@ SRC_DIR = REPO_ROOT / "FloppyAI" / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from stream_export import write_kryoflux_stream  # type: ignore
+from stream_export_dtc import write_kryoflux_stream_dtc  # type: ignore
 
 
 def parse_range(spec: str) -> List[int]:
@@ -238,7 +238,7 @@ def main(argv: List[str]) -> int:
             # Write trackNN.S.raw (provide exact per-rev lengths to align OOB indices)
             fname = f"track{t:02d}.{int(s)}.raw"
             fpath = out_dir / fname
-            write_kryoflux_stream(
+            write_kryoflux_stream_dtc(
                 intervals,
                 track=int(t),
                 side=int(s),
@@ -251,9 +251,9 @@ def main(argv: List[str]) -> int:
                 include_sck_oob=(not args.no_sck_oob),
                 include_initial_index=(True if args.initial_index and not args.no_initial_index else False),
                 ick_hz=float(args.ick_hz),
-                include_kf_version_info=(not args.no_kf_version_info),
+                include_kf_version_info=True,
                 include_clock_info=(not args.no_clock_info),
-                include_hw_info=bool(args.hw_info),
+                include_hw_info=True,
             )
 
     print(f"Generated {len(tracks)*len(sides)} files in {out_dir}")
