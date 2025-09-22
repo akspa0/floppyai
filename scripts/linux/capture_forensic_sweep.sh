@@ -157,19 +157,27 @@ capture_side() {
   sleep "$SPINUP"
   for ((sw=1; sw<=SWEEPS; sw++)); do
     echo "-- Sweep ${sw} forward" | tee -a "$LOG_PATH"
+    local dir_fwd=$(printf 'sweep_%02d_fwd' "$sw")
+    mkdir -p "$dir_fwd"
+    pushd "$dir_fwd" >/dev/null
     local t=$START_TRACK
     while (( t <= END_TRACK )); do
       run_read "$t" "$side"
       echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"; sleep "$COOLDOWN"
       t=$(( t + STEP ))
     done
+    popd >/dev/null
     echo "-- Sweep ${sw} backward" | tee -a "$LOG_PATH"
+    local dir_bwd=$(printf 'sweep_%02d_bwd' "$sw")
+    mkdir -p "$dir_bwd"
+    pushd "$dir_bwd" >/dev/null
     t=$END_TRACK
     while (( t >= START_TRACK )); do
       run_read "$t" "$side"
       echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"; sleep "$COOLDOWN"
       t=$(( t - STEP ))
     done
+    popd >/dev/null
   done
 }
 

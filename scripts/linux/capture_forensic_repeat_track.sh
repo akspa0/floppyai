@@ -122,19 +122,23 @@ build_read_cmd() {
 }
 
 for ((i=1; i<=REPEATS; i++)); do
+  PASS_DIR=$(printf 'read_%02d' "$i")
+  mkdir -p "$PASS_DIR"
+  pushd "$PASS_DIR" >/dev/null
   ts=$(date +"%Y%m%d_%H%M%S")
   cmd=$(build_read_cmd "$TRACK" "$TRACK" "$SIDE")
-  echo "[READ ] $cmd" | tee -a "$LOG_PATH"
+  echo "[READ ] (pass $i) $cmd" | tee -a "$LOG_PATH"
   if [[ $DRY_RUN -eq 0 ]]; then
     eval "$cmd" | tee -a "$LOG_PATH"
   fi
+  popd >/dev/null
   if (( i < REPEATS )); then
     echo "Cooldown ${COOLDOWN}s..." | tee -a "$LOG_PATH"
     sleep "$COOLDOWN"
   fi
 done
 
-shopt -s nullglob; files=(track*.raw)
+mapfile -t files < <(find . -type f -name 'track*.raw')
 if (( ${#files[@]} == 0 )); then
   echo "ERROR: No track*.raw files were written. Listing directory:" | tee -a "$LOG_PATH"
   pwd | tee -a "$LOG_PATH"
@@ -149,8 +153,8 @@ if (( SANITY == 1 )); then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   TOOL="$SCRIPT_DIR/../../tools/stream_sanity.py"
   if [[ -f "$TOOL" ]]; then
-    echo "Running stream sanity on track*.raw" | tee -a "$LOG_PATH"
-    python3 "$TOOL" --glob 'track*.raw' | tee -a "$LOG_PATH" || true
+    echo "Running stream sanity on */track*.raw" | tee -a "$LOG_PATH"
+    python3 "$TOOL" --glob '*/track*.raw' | tee -a "$LOG_PATH" || true
   else
     echo "WARN: sanity tool not found at $TOOL" | tee -a "$LOG_PATH"
   fi

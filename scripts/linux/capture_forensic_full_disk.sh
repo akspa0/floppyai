@@ -35,6 +35,7 @@ Optional (common):
   --no-p                 When rich, do not include -p
   --no-ml                When rich, do not include -m2 -l63
   --sanity               Run stream_sanity.py over track*.raw at the end
+  --passes <N>           Number of whole-disk passes to run (default: 1). Each pass is stored in a separate subdir.
 
 Optional (capture profile):
   --profile <name>       One of: 35HD, 35DD, 525HD, 525DD (sets default track range)
@@ -75,6 +76,8 @@ RICH=0
 NO_P=0
 NO_ML=0
 SANITY=0
+PASSES=1
+CORPUS=0
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -97,6 +100,8 @@ while [[ $# -gt 0 ]]; do
     --no-p) NO_P=1; shift 1;;
     --no-ml) NO_ML=1; shift 1;;
     --sanity) SANITY=1; shift 1;;
+    --passes) PASSES=${2:?}; shift 2;;
+    --corpus) CORPUS=1; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown option: $1" >&2; usage; exit 2;;
   esac
@@ -167,7 +172,10 @@ run_read() {
 }
 
 capture_side() {
-  local side=$1
+  local side=$1 pass_idx=$2
+  local PASS_DIR=$(printf 'pass_%02d_side_%d' "$pass_idx" "$side")
+  mkdir -p "$PASS_DIR"
+  pushd "$PASS_DIR" >/dev/null
   echo "-- Side ${side} spin-up: ${SPINUP}s" | tee -a "$LOG_FILE"
   sleep "$SPINUP"
   if (( STEP == 1 )); then
@@ -218,12 +226,14 @@ capture_side() {
 }
 
 # Execute
-if [[ "$SIDES" == "both" || "$SIDES" == "0" ]]; then
-  capture_side 0
-fi
-if [[ "$SIDES" == "both" || "$SIDES" == "1" ]]; then
-  capture_side 1
-fi
+for ((pass=1; pass<=PASSES; pass++)); do
+  if [[ "$SIDES" == "both" || "$SIDES" == "0" ]]; then
+    capture_side 0 "$pass"
+  fi
+  if [[ "$SIDES" == "both" || "$SIDES" == "1" ]]; then
+    capture_side 1 "$pass"
+  fi
+done
 
 echo "Done. Outputs in $RUN_DIR" | tee -a "$LOG_FILE"
 
@@ -232,10 +242,22 @@ if (( SANITY == 1 )); then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   TOOL="$SCRIPT_DIR/../../tools/stream_sanity.py"
   if [[ -f "$TOOL" ]]; then
-    echo "Running stream sanity on track*.raw" | tee -a "$LOG_FILE"
-    python3 "$TOOL" --glob 'track*.raw' | tee -a "$LOG_FILE" || true
+    echo "Running stream sanity on */track*.raw" | tee -a "$LOG_FILE"
+    python3 "$TOOL" --glob '*/track*.raw' | tee -a "$LOG_FILE" || true
   else
     echo "WARN: sanity tool not found at $TOOL" | tee -a "$LOG_FILE"
+  fi
+fi
+
+# Optional: corpus comparison across pass_* subdirs
+if (( CORPUS == 1 )); then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  COMPARE_TOOL="$SCRIPT_DIR/../../tools/compare_corpus.py"
+  if [[ -f "$COMPARE_TOOL" ]]; then
+    echo "Running corpus comparison across passes" | tee -a "$LOG_FILE"
+    python3 "$COMPARE_TOOL" --root "$RUN_DIR" | tee -a "$LOG_FILE" || true
+  else
+    echo "WARN: compare tool not found at $COMPARE_TOOL" | tee -a "$LOG_FILE"
   fi
 fi
 popd >/dev/null
