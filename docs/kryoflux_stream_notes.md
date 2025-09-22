@@ -23,16 +23,16 @@ C2/ISB sample encoding (ticks → bytes)
 OOB structure
 - Each OOB block starts with a 4-byte header: 0x0D, Type, Size(LE16), followed by payload bytes.
 - Types used in our generator:
-  - Type 0x04: KFInfo (ASCII), e.g., "sck=24027428.5714285, ick=3003428.5714285625\0"
+  - Type 0x04: KFInfo (ASCII). The first OOB at byte 0 is: "KryoFlux stream - version {version}" with NO trailing NUL (size equals ASCII length).
   - Type 0x02: Disk Index (12 bytes payload: three LE32 words):
     - StreamPosition: ISB byte position where the next flux value will be written/read.
-    - SampleCounter: Total SCK ticks elapsed at index detection.
-    - IndexCounter: Total ICK cycles elapsed at index detection.
+    - SampleCounter: SCK ticks since the last flux reversal up to the index event.
+    - IndexCounter: Free-running ICK cycle count at index detection.
   - Type 0x03: StreamEnd (8 bytes payload: two LE32 words):
     - StreamPosition: Total ISB byte count at transfer end.
     - ResultCode: Hardware status (0 = success).
   - Type 0x01: StreamInfo (optional, 8 bytes payload):
-    - StreamPosition and TransferTime (ms).
+    - StreamPosition (actual ISB byte position at OOB insertion) and TransferTime (ms).
   - Type 0x0D: EOF marker (Size typically 0x0D0D).
 
 Multiple revolutions and index
@@ -40,14 +40,15 @@ Multiple revolutions and index
 - Index timing can be recovered from cumulative SampleCounter and IndexCounter; RPM may be derived between indices.
 
 Header modes and defaults
-- ASCII preamble (default): A null-terminated ASCII info line first (legacy), then OOBs and samples. This is our default for best DTC compatibility.
-- OOB-first: Begin with KFInfo (type 0x04), optional initial Index (type 0x02), then ISB samples. Still supported via `--header-mode oob`.
+- OOB-first (default): Begin with KFInfo (type 0x04) at byte 0 ("KryoFlux stream - version {version}"). Then StreamInfo and ISB samples.
+- ASCII preamble (legacy): A null-terminated ASCII line at file start is supported via `--header-mode ascii`, but not used by default.
 
 Generator alignment choices (current)
-- Emit KFInfo (type 0x04) with `sck` and `ick` values.
-- Optional initial Index (type 0x02) at start with zeroed counters.
-- After each revolution’s samples, emit Index (type 0x02) carrying {StreamPosition, SampleCounter, IndexCounter}.
-- End with StreamEnd (type 0x03) and EOF (type 0x0D).
+- Emit KFInfo (type 0x04) version string as first OOB, no trailing NUL.
+- Emit StreamInfo (type 0x01): initial (SP=0, ms=0) and periodic, with payload SP equal to the actual ISB byte position at insertion.
+- No initial Index at start-of-stream by default.
+- Emit Index (type 0x02) after each revolution boundary with {StreamPosition, SampleCounter, IndexCounter}.
+- End with StreamEnd (type 0x03) and EOF (type 0x0D) sentinel.
 
 Open questions to validate against real DTC captures
 - Does your DTC build require an initial index OOB at the beginning?

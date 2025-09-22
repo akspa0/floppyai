@@ -38,20 +38,25 @@ def write_kryoflux_stream(
     num_revs: int = 1,
     version: str = '3.50',
     rpm: float | None = None,
-    sck_hz: float = 24000000.0,
+    sck_hz: float = 24027428.5714285,
     rev_lengths: List[int] | None = None,
-    header_mode: str = 'ascii',
+    header_mode: str = 'oob',
     include_sck_oob: bool = True,
     include_initial_index: bool = False,
-    ick_hz: float = 3000000.0,
+    ick_hz: float = 3003428.5714285625,
     include_kf_version_info: bool = True,
-    include_clock_info: bool = True,
+    include_clock_info: bool = False,
     include_hw_info: bool = False,
+    include_streaminfo: bool = True,
+    streaminfo_chunk_bytes: int = 32756,
+    streaminfo_transfer_ms: int = 170,
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream with spec-compliant ISB and OOB blocks.
-    Layout:
-      - OOB KFInfo (type=0x04): ASCII "sck=..., ick=...\0"
+    Default layout (HxC-compatible):
+      - OOB KFInfo (type=0x04) at byte 0: ASCII "KryoFlux stream - version {version}" (no trailing NUL)
+      - OOB StreamInfo (type=0x01): initial (StreamPosition=0, TransferTimeMs=0) and periodic thereafter.
+        Periodic payload StreamPosition equals the actual ISB byte count at the moment of insertion.
       - Encoded ISB flux blocks (C2 timing values in sample ticks)
       - OOB Index (type=0x02, 12-byte LE payload) after each revolution boundary
       - OOB StreamEnd (type=0x03, 8-byte LE payload)
@@ -125,33 +130,40 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream starting with KFInfo (Type 0x04).
+    # Build stream starting with KFInfo (Type 0x04), matching real DTC ordering/content.
     stream = bytearray()
-    # 1) Version info as KFInfo (recommended to appear first after preamble)
-    if include_kf_version_info:
-        vtxt = f"KryoFlux stream - version {version}\x00"
-        stream.extend(oob_block(0x04, vtxt.encode('ascii')))
-    # 2) Clock info as KFInfo (optional but commonly present)
-    if include_clock_info:
-        ctxt = f"sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}\x00"
-        stream.extend(oob_block(0x04, ctxt.encode('ascii')))
-    # 3) Extended HW info as KFInfo (only when explicitly enabled)
+    # 0) Optional ASCII preamble is written later when header_mode == 'ascii'.
+    # 1) Short KFInfo with host date/time and hc=0 (optional; off by default)
+    now = datetime.now()
+    host_date = now.strftime('%Y.%m.%d')
+    host_time = now.strftime('%H:%M:%S')
     if include_hw_info:
-        now = datetime.now()
-        host_date = now.strftime('%Y.%m.%d')
-        host_time = now.strftime('%H:%M:%S')
-        dev_date = now.strftime('%b %d %Y')  # e.g., "Mar 19 2011"
+        info1 = f"host_date={host_date}, host_time={host_time}, hc=0"
+        stream.extend(oob_block(0x04, info1.encode('ascii')))
+    # 2) Long KFInfo with device/version/hwid/hwrv/hs and clocks
+    if include_hw_info:
+        dev_date = now.strftime('%b %d %Y')
         dev_time = now.strftime('%H:%M:%S')
-        itxt = (
-            f"host_date={host_date}, host_time={host_time}, name=KryoFlux DiskSystem, "
-            f"version={version}, date={dev_date}, time={dev_time}, hwid=1, hwrv=1\x00"
+        info2 = (
+            f"name=KryoFlux DiskSystem, version={version}, date={dev_date}, time={dev_time}, "
+            f"hwid=1, hwrv=1, hs=1, sck={float(sck_hz):.13f}, ick={float(ick_hz):.13f}"
         )
-        stream.extend(oob_block(0x04, itxt.encode('ascii')))
+        stream.extend(oob_block(0x04, info2.encode('ascii')))
+    # 3) Optional standalone version string as KFInfo (rare in real streams)
+    if include_kf_version_info:
+        vtxt = f"KryoFlux stream - version {version}"
+        stream.extend(oob_block(0x04, vtxt.encode('ascii')))
     # Optional initial index marker at start-of-stream (counters at 0)
     # Using full 12-byte payload per spec (LE32: StreamPosition, SampleCounter, IndexCounter)
     isb_bytes = 0
     total_sck_ticks = 0  # cumulative SCK ticks across stream
     index_counter = 0    # in ICK cycles (derived from total SCK time)
+    # StreamInfo scheduling
+    next_streaminfo = 0
+    if include_streaminfo:
+        # Emit initial StreamInfo with position=0 and transfer time=0
+        stream.extend(oob_block(0x01, struct.pack('<II', 0, 0)))
+        next_streaminfo = int(streaminfo_chunk_bytes)
     if include_initial_index:
         payload = struct.pack('<III', int(isb_bytes), 0, int(index_counter))
         stream.extend(oob_block(0x02, payload))
@@ -174,6 +186,13 @@ def write_kryoflux_stream(
             isb_bytes += len(enc)
             total_sck_ticks += int(t)
             rev_ticks += int(t)
+            # Periodic StreamInfo based on ISB byte count; payload SP = actual ISB bytes at insertion
+            if include_streaminfo and next_streaminfo > 0:
+                while isb_bytes >= next_streaminfo:
+                    sp = int(isb_bytes)
+                    tt = int(streaminfo_transfer_ms)
+                    stream.extend(oob_block(0x01, struct.pack('<II', sp, tt)))
+                    next_streaminfo += int(streaminfo_chunk_bytes)
         # At the index boundary, SampleCounter is ticks since last flux to index.
         # Our generator aligns the boundary exactly, so this is typically 0.
         sample_since_last_flux = 0

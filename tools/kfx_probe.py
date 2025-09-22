@@ -61,8 +61,16 @@ def parse_stream(data: bytes) -> Dict[str, object]:
             oob_start = pos
             payload_start = pos + 4
             payload_end = payload_start + size_le
+            # Special handling for EOF sentinel: type=0x0D, size typically 0x0D0D, no payload
+            if oob_type == 0x0D:
+                eof_found = True
+                parsed = {"EOF.size": size_le}
+                hist["OOB"] += 1
+                oob_list.append((oob_start, oob_type, size_le, parsed))
+                # Stop parsing at EOF regardless of indicated size
+                break
             if payload_end > n:
-                # Truncated OOB; stop
+                # Truncated OOB (but not EOF); stop
                 oob_list.append((oob_start, oob_type, size_le, {"error": "truncated"}))
                 break
             parsed = {}
@@ -87,10 +95,6 @@ def parse_stream(data: bytes) -> Dict[str, object]:
                 sp = int.from_bytes(data[payload_start:payload_start+4], "little", signed=False)
                 tt = int.from_bytes(data[payload_start+4:payload_start+8], "little", signed=False)
                 parsed = {"StreamInfo.StreamPosition": sp, "StreamInfo.TransferTimeMs": tt}
-            elif oob_type == 0x0D:
-                # EOF marker (size is typically 0x0D0D)
-                eof_found = True
-                parsed = {"EOF.size": size_le}
             else:
                 parsed = {"payload_len": size_le}
             hist["OOB"] += 1
