@@ -121,40 +121,49 @@ def write_kryoflux_stream(
             if rem:
                 splits[-1] += rem
 
-    # Build stream starting with KFInfo (Type 0x04): "sck=..., ick=...\0"
+    # Build stream starting with KFInfo (Type 0x04). Emit two strings to mirror typical device output.
     stream = bytearray()
-    info_txt = f"sck={float(sck_hz):.7f}, ick={float(ick_hz):.7f}\x00"
-    stream.extend(oob_block(0x04, info_txt.encode('ascii')))
+    info_txt1 = (
+        f"name=KryoFlux DiskSystem, version={version}, hwid=1, hwrv=1\x00"
+    )
+    info_txt2 = f"sck={float(sck_hz):.7f}, ick={float(ick_hz):.7f}\x00"
+    stream.extend(oob_block(0x04, info_txt1.encode('ascii')))
+    stream.extend(oob_block(0x04, info_txt2.encode('ascii')))
     # Optional initial index marker at start-of-stream (counters at 0)
     # Using full 12-byte payload per spec (LE32: StreamPosition, SampleCounter, IndexCounter)
     isb_bytes = 0
-    sample_counter = 0  # in sck ticks
-    index_counter = 0   # in ick cycles
+    total_sck_ticks = 0  # cumulative SCK ticks across stream
+    index_counter = 0    # in ICK cycles (derived from total SCK time)
     if include_initial_index:
-        payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+        payload = struct.pack('<III', int(isb_bytes), 0, int(index_counter))
         stream.extend(oob_block(0x02, payload))
 
     pos = 0
     for i, cnt in enumerate(splits):
         if cnt <= 0:
             # Still write an index block for an empty revolution
-            payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+            payload = struct.pack('<III', int(isb_bytes), 0, int(index_counter))
             stream.extend(oob_block(0x02, payload))
             continue
         rev = intervals[pos:pos+cnt]
         pos += cnt
         # Encode each ns interval into C2 ticks
+        rev_ticks = 0
         for ns_val in rev:
             t = ns_to_ticks(int(ns_val))
             enc = encode_ticks(t)
             stream.extend(enc)
             isb_bytes += len(enc)
-            sample_counter += int(t)
-        # Compute index counter via elapsed seconds * ick_hz
-        elapsed_seconds = float(sample_counter) / float(sck_hz) if sck_hz > 0 else 0.0
+            total_sck_ticks += int(t)
+            rev_ticks += int(t)
+        # At the index boundary, SampleCounter is ticks since last flux to index.
+        # Our generator aligns the boundary exactly, so this is typically 0.
+        sample_since_last_flux = 0
+        # Compute IndexCounter via elapsed seconds * ick_hz using total_sck_ticks
+        elapsed_seconds = float(total_sck_ticks) / float(sck_hz) if sck_hz > 0 else 0.0
         index_counter = int(round(elapsed_seconds * float(ick_hz)))
         # OOB Index marker (Type 0x02) with 12-byte payload
-        payload = struct.pack('<III', int(isb_bytes), int(sample_counter), int(index_counter))
+        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(index_counter))
         stream.extend(oob_block(0x02, payload))
 
     # OOB StreamEnd (Type 0x03): 8-byte payload (LE32 StreamPosition, LE32 ResultCode)

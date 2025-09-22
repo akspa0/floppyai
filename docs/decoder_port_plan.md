@@ -20,6 +20,23 @@ This plan describes how we will re‑implement, in our own code, a compact flux�
   - Optional lightweight visual marker PNG per track (sync/IDAM/DAM positions), disabled by default.
   - Integration hooks to append decode metrics into corpus/analysis summaries.
 
+## Status Update — STREAM Write (2025‑09‑22)
+
+- HxC reads our generated STREAM files and shows rough flux for Side 0; Side 1 appears sparse/garbled depending on the pattern.
+- DTC refuses to open the generated files for writing, reporting:
+  - `Image name:` / `Can't open image file:`
+- We strictly used STREAM mode and CLI ordering (`-f<prefix>` first, then `-i0 -d -s -e -g -w`) and tried multiple base variants (`-ftrack`, `-ftrack.raw`, absolute `-f$(pwd)/track`, `-f$(pwd)/track.raw`). None were accepted by DTC on the test host.
+
+Planned actions for alignment (tomorrow):
+- Gather known‑good reference STREAMs via DTC capture for a few tracks/sides (e.g., 00.0, 00.1).
+- Implement `kfx_probe.py` to dump OOB blocks (type/len/offsets) and opcode histograms; compare reference vs generated.
+- Ensure OOB type 2 (Disk Index) includes a 16‑bit LE timer payload; verify initial index presence and header mode expectations (ASCII preamble vs OOB‑first).
+- Adjust `src/stream_export.py` to mirror the reference files byte‑for‑byte per rev 1.1 and empirical DTC behavior.
+
+See also:
+- `docs/kryoflux_stream_notes.md` — concise summary of the STREAM protocol rev 1.1 we are following.
+- `docs/stream_write_investigation.md` — commands tried, variants matrix, and findings log.
+
 ## Module Layout (new)
 
 ```text
