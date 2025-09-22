@@ -1,0 +1,23 @@
+# Ensure shell scripts and source files stay LF for Linux execution
+*.sh text eol=lf
+*.bash text eol=lf
+scripts/linux/** text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+
+# Treat KryoFlux streams and other binaries as binary
+*.raw binary
+*.bin binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.webp binary
+
+# Optional: avoid diffing large binaries explicitly (binary macro already sets this)
+# *.raw -diff

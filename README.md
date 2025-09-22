@@ -41,6 +41,26 @@ Notes:
 - Default export is PNG; SVG for large reports will be added where appropriate.
 - Profiles set RPM and bias overlay heuristics. Supported: `35HD`, `35DD`, `525HD`, `525DD`, plus GCR variants `35HDGCR`, `35DDGCR`, `525DDGCR`.
 
+## Quick Start: Generate → Write → Read (Linux DTC, 3.5" HD)
+
+Run this on the Linux host connected to your KryoFlux hardware. This generates a full‑disk synthetic flux set, writes it to the physical disk (both sides), then reads back and analyzes the captures.
+
+```bash
+# End-to-end experiment: PRBS7 pattern, 3 revs, 24 MHz sample clock
+chmod +x FloppyAI/scripts/linux/experiment_write_read_analyze.sh
+./FloppyAI/scripts/linux/experiment_write_read_analyze.sh \
+  --tracks 0-80 --sides 0,1 --revs 3 --drive 0 \
+  --label hd35_prbs7_full \
+  --pattern prbs7 --long-ns 4200 --short-ns 2200 --seed 123 \
+  --sck-hz 24000000.0 --header-mode ascii \
+  --sanity
+```
+
+Notes:
+- `--tracks 0-80` is the standard full range for 3.5" HD. If you want overtracks, use `0-82`.
+- `--header-mode ascii` produces a null‑terminated ASCII preamble for broader tool compatibility; if HxC complains, re‑run with `--header-mode oob`.
+- The script invokes `dtc` to write streams (`-i4 -w`) and to read back captures (`-i0`). Outputs and logs are stored under `FloppyAI/output_captures/experiments/<label>/`.
+
 ## How to Run
 
 - Recommended: run directly from the repository root
@@ -237,14 +257,19 @@ python FloppyAI/src/main.py analyze_corpus .\stream_dumps --generate-missing --p
 
 ### Linux DTC Script (on the hardware host)
 
-When running hardware on a Linux host, you can use the helper script to write then read with DTC:
+When running hardware on a Linux host, you can use the helper script to write then read with DTC for an entire set:
 ```bash
-chmod +x FloppyAI/scripts/linux/dtc_write_read.sh
-FloppyAI/scripts/linux/dtc_write_read.sh \
-  --write /path/to/generated.raw --track 80 --side 0 --revs 3 \
-  --out-dir ./captures --drive 0
+chmod +x FloppyAI/scripts/linux/dtc_write_read_set.sh
+FloppyAI/scripts/linux/dtc_write_read_set.sh \
+  --image-dir /absolute/path/to/streams_dir \
+  --drive 0 --tracks 0-80 --sides 0,1 \
+  --revs 3 --read-back \
+  --out-dir ./captures
 ```
-This produces a timestamped capture in `--out-dir` along with a `.log` containing the exact `dtc` commands and version used. Adjust flags to suit your environment; sudo is used by default (pass `--no-sudo` to disable).
+Details:
+- Accepts sets named `trackNN.S.raw` (e.g., `track00.0.raw`) or `NN.S.raw` (e.g., `00.0.raw`).
+- Uses per‑file bases (`-ftrack00.0` / `-f00.0`) with `-i4 -w` to write, and `-i0` to read back.
+- Produces captures and a `.log` in `--out-dir` with the exact `dtc` commands used. Sudo is used by default (pass `--no-sudo` to disable).
 
 ## Commands
 
