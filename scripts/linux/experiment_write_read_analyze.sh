@@ -15,6 +15,16 @@ set -euo pipefail
 #     --pattern constant --interval-ns 4000 --rev-time-ns 200000000 \
 #     --sanity
 #
+# Patterns supported by generator:
+#   constant | random | alt | zeros | ones | sweep | prbs7
+#
+# Examples:
+#   # PRBS7 with explicit long/short and seed
+#   ./experiment_write_read_analyze.sh \
+#     --tracks 0-9 --sides 0 --revs 3 --drive 0 \
+#     --label prbs7_L4200_S2200 \
+#     --pattern prbs7 --long-ns 4200 --short-ns 2200 --seed 123
+#
 # Notes:
 # - Requires Python 3 environment with repo's FloppyAI/src on sys.path.
 # - Uses repo-local output folder 'output_captures/experiments'.
@@ -26,7 +36,7 @@ SIDES="0,1"
 REVS=3
 DRIVE=0
 LABEL="experiment"
-PATTERN="constant"      # constant|random
+PATTERN="constant"      # constant|random|alt|zeros|ones|sweep|prbs7
 INTERVAL_NS=4000         # for constant
 MEAN_NS=4000.0           # for random
 STD_NS=400.0             # for random
@@ -34,6 +44,12 @@ REV_TIME_NS=200000000    # ~300 RPM
 SCK_HZ=24027428.5714285
 USE_SUDO=1
 SANITY=0
+# Extended pattern params
+LONG_NS=4000
+SHORT_NS=2000
+SWEEP_MIN_NS=2000
+SWEEP_MAX_NS=6000
+SEED=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +64,11 @@ while [[ $# -gt 0 ]]; do
     --std-ns) STD_NS=${2:?}; shift 2;;
     --rev-time-ns) REV_TIME_NS=${2:?}; shift 2;;
     --sck-hz) SCK_HZ=${2:?}; shift 2;;
+    --long-ns) LONG_NS=${2:?}; shift 2;;
+    --short-ns) SHORT_NS=${2:?}; shift 2;;
+    --sweep-min-ns) SWEEP_MIN_NS=${2:?}; shift 2;;
+    --sweep-max-ns) SWEEP_MAX_NS=${2:?}; shift 2;;
+    --seed) SEED=${2:?}; shift 2;;
     --no-sudo) USE_SUDO=0; shift 1;;
     --sanity) SANITY=1; shift 1;;
     -h|--help)
@@ -80,6 +101,7 @@ SANITY_TOOL="$TOOLS_DIR/stream_sanity.py"
   echo "Tracks=$TRACKS Sides=$SIDES Revs=$REVS Drive=$DRIVE Label=$LABEL"
   echo "Pattern=$PATTERN interval_ns=$INTERVAL_NS mean_ns=$MEAN_NS std_ns=$STD_NS"
   echo "rev_time_ns=$REV_TIME_NS sck_hz=$SCK_HZ"
+  echo "long_ns=$LONG_NS short_ns=$SHORT_NS sweep_min_ns=$SWEEP_MIN_NS sweep_max_ns=$SWEEP_MAX_NS seed=$SEED"
   echo "Run dir: $RUN_DIR"
 } > "$LOG_FILE"
 
@@ -94,16 +116,20 @@ python3 "$PATTERN_GEN" \
   --interval-ns "$INTERVAL_NS" \
   --mean-ns "$MEAN_NS" \
   --std-ns "$STD_NS" \
+  --long-ns "$LONG_NS" \
+  --short-ns "$SHORT_NS" \
+  --sweep-min-ns "$SWEEP_MIN_NS" \
+  --sweep-max-ns "$SWEEP_MAX_NS" \
+  --seed "$SEED" \
   --output-dir "$PAT_DIR" | tee -a "$LOG_FILE"
 
 # 2) Write set and 3) Read back captures
-bash "$WRITE_READ_SET" \
-  --image-dir "$PAT_DIR" \
-  --drive "$DRIVE" \
-  --revs "$REVS" \
-  --out-dir "$CAP_DIR" \
-  --read-back \
-  ${USE_SUDO:+} | tee -a "$LOG_FILE"
+CMD_WR="$WRITE_READ_SET --image-dir \"$PAT_DIR\" --drive \"$DRIVE\" --revs \"$REVS\" --out-dir \"$CAP_DIR\" --read-back --tracks \"$TRACKS\" --sides \"$SIDES\""
+if (( USE_SUDO == 0 )); then
+  CMD_WR+=" --no-sudo"
+fi
+echo "Invoking: $CMD_WR" | tee -a "$LOG_FILE"
+bash -lc "$CMD_WR" | tee -a "$LOG_FILE"
 
 # 4) Analyze captures
 python3 "$ANALYZE" --dir "$CAP_DIR" --glob '*.raw' | tee -a "$LOG_FILE"

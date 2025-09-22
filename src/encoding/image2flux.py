@@ -104,11 +104,28 @@ def generate_from_image(
     Returns (output_path, total_intervals).
     """
     vec01 = _load_image_row(image_path, angular_bins=angular_bins, dither=dither, threshold=float(threshold))
-    intervals = _build_intervals_from_vector(vec01, revolutions=int(revolutions), on_count=int(on_count), off_count=int(off_count), interval_ns=int(interval_ns))
+    intervals = _build_intervals_from_vector(
+        vec01,
+        revolutions=int(revolutions),
+        on_count=int(on_count),
+        off_count=int(off_count),
+        interval_ns=int(interval_ns),
+    )
 
     if output_format == "internal":
         write_internal_raw(intervals.tolist(), track, side, output_path, num_revs=revolutions)
     else:
-        write_kryoflux_stream(intervals.tolist(), track, side, output_path, num_revs=revolutions, rpm=float(rpm))
+        # Compute exact per-revolution lengths so OOB index blocks align
+        per_rev_len = int(intervals.size // max(1, int(revolutions)))
+        rev_lengths = [per_rev_len] * int(revolutions)
+        write_kryoflux_stream(
+            intervals.tolist(),
+            track,
+            side,
+            output_path,
+            num_revs=revolutions,
+            rpm=float(rpm),
+            rev_lengths=rev_lengths,
+        )
 
     return output_path, int(intervals.size)

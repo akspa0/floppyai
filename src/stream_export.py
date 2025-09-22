@@ -38,6 +38,7 @@ def write_kryoflux_stream(
     version: str = '3.50',
     rpm: float | None = None,
     sck_hz: float = 24027428.5714285,
+    rev_lengths: List[int] | None = None,
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
@@ -58,12 +59,10 @@ def write_kryoflux_stream(
         return max(0, int(round((float(ns_val) * sck_hz) / 1e9)))
 
     def encode_ticks(ticks: int) -> bytes:
-        # Use C2 sample encoding compatible with our parser
-        if ticks <= 13:
-            return bytes((0x00, ticks & 0xFF))
-        if ticks <= 0xFF:
-            return bytes((ticks & 0xFF,))
-        # Larger than one byte: use overflow blocks and a final 16-bit sample
+        # Emit C2 samples using 16-bit values with overflow markers only.
+        # This is broadly supported by tools like HxC.
+        if ticks < 0:
+            ticks = 0
         parts = bytearray()
         if ticks > 0xFFFF:
             overflow = ticks // 65536
@@ -84,18 +83,22 @@ def write_kryoflux_stream(
         num_revs = 1
     intervals = np.asarray(flux_intervals, dtype=np.uint64)
     n = int(intervals.size)
-    if num_revs == 1:
-        splits = [n]
+    if rev_lengths is not None and len(rev_lengths) == num_revs:
+        # Use exact boundaries provided by the caller
+        splits = list(rev_lengths)
     else:
-        base = n // num_revs
-        rem = n % num_revs
-        splits = [base] * num_revs
-        if rem:
-            splits[-1] += rem
+        if num_revs == 1:
+            splits = [n]
+        else:
+            base = n // num_revs
+            rem = n % num_revs
+            splits = [base] * num_revs
+            if rem:
+                splits[-1] += rem
 
     # Build stream
     stream = bytearray()
-    info_txt = f"KryoFlux DiskSystem, sck={sck_hz}, track={track}, side={side}"
+    info_txt = f"KryoFlux stream, sck={sck_hz}, track={track}, side={side}"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
 
     pos = 0
