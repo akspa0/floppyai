@@ -120,32 +120,39 @@ fi
 WRITE_DIR=$(dirname "${WRITE_INPUT}")
 WRITE_BASE=$(basename "${WRITE_INPUT}")
 pushd "$WRITE_DIR" >/dev/null
-# Write from stream set (image type 4): place -f before -i and all others
-WRITE_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w")
 
-# For read, run within OUT_DIR and use a prefix so DTC creates BASE_NAME%02d.%d.raw
-# Read STREAM capture (image type 0): place -f before -i and all others
-READ_CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${BASE_NAME} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS}")
+# Build exact write/read command strings for logging
+WRITE_STR="${SUDO_PREFIX}${DTC_BIN} -f${WRITE_BASE} -i4 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -w"
+READ_STR="${SUDO_PREFIX}${DTC_BIN} -f${BASE_NAME} -i0 -d${DRIVE} -s${TRACK} -e${TRACK} -g${SIDE} -r${REVS}"
 
-echo "[WRITE] ${WRITE_CMD[*]}"
-echo "[READ ] ${READ_CMD[*]}"
+echo "[WRITE] $WRITE_STR"
+echo "[READ ] $READ_STR"
 {
-  echo "[WRITE] ${WRITE_CMD[*]}"
-  echo "[READ ] ${READ_CMD[*]}"
+  echo "[WRITE] $WRITE_STR"
+  echo "[READ ] $READ_STR"
 } >>"$LOG_PATH"
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Dry-run: not executing dtc commands. Log at $LOG_PATH"
+  popd >/dev/null
   exit 0
 fi
 
-# Execute
-# shellcheck disable=SC2068
-eval ${WRITE_CMD[@]} | tee -a "$LOG_PATH"
+# Execute write
+if [[ $USE_SUDO -eq 1 ]]; then
+  sudo "$DTC_BIN" -f"$WRITE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+else
+  "$DTC_BIN" -f"$WRITE_BASE" -i4 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -w | tee -a "$LOG_PATH"
+fi
 popd >/dev/null
+
+# Execute read into OUT_DIR with prefix BASE_NAME%02d.%d.raw
 pushd "$OUT_DIR" >/dev/null
-# shellcheck disable=SC2068
-eval ${READ_CMD[@]} | tee -a "$LOG_PATH"
+if [[ $USE_SUDO -eq 1 ]]; then
+  sudo "$DTC_BIN" -f"$BASE_NAME" -i0 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -r"$REVS" | tee -a "$LOG_PATH"
+else
+  "$DTC_BIN" -f"$BASE_NAME" -i0 -d"$DRIVE" -s"$TRACK" -e"$TRACK" -g"$SIDE" -r"$REVS" | tee -a "$LOG_PATH"
+fi
 popd >/dev/null
 
 echo "Capture saved to: $OUT_DIR/${BASE_NAME}%02d.%d.raw"
