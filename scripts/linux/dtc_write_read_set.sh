@@ -203,12 +203,15 @@ echo "Using dtc prefix: $PREFIX" | tee -a "$LOG_PATH"
 # Write all (use write-from-stream: -i4 with -w); dtc will append NN.S.raw to PREFIX
 for entry in "${SORTED[@]}"; do
   IFS=':' read -r t s p <<<"$entry"
-  CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w")
-  echo "[WRITE] ${CMD[*]}"
-  echo "[WRITE] ${CMD[*]}" >>"$LOG_PATH"
+  LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${PREFIX} -i4 -d${DRIVE} -s${t} -e${t} -g${s} -w"
+  echo "[WRITE] $LOG_CMD"
+  echo "[WRITE] $LOG_CMD" >>"$LOG_PATH"
   if [[ $DRY_RUN -eq 1 ]]; then continue; fi
-  # shellcheck disable=SC2068
-  eval ${CMD[@]} | tee -a "$LOG_PATH"
+  if [[ $USE_SUDO -eq 1 ]]; then
+    sudo "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+  else
+    "$DTC_BIN" -f"$PREFIX" -i4 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -w | tee -a "$LOG_PATH"
+  fi
   sleep 0.2
 done
 popd >/dev/null
@@ -222,12 +225,15 @@ if [[ $READ_BACK -eq 1 ]]; then
   for entry in "${SORTED[@]}"; do
     IFS=':' read -r t s p <<<"$entry"
     pref="capture_$(printf "%02d" "$t").$s"
-    CMD=(bash -lc "${SUDO_PREFIX}${DTC_BIN} -f${pref} -i0 -d${DRIVE} -s${t} -e${t} -g${s} -r${REVS}")
-    echo "[READ ] ${CMD[*]}"
-    echo "[READ ] ${CMD[*]}" >>"$LOG_PATH"
+    LOG_CMD="${SUDO_PREFIX}${DTC_BIN} -f${pref} -i0 -d${DRIVE} -s${t} -e${t} -g${s} -r${REVS}"
+    echo "[READ ] $LOG_CMD"
+    echo "[READ ] $LOG_CMD" >>"$LOG_PATH"
     if [[ $DRY_RUN -eq 1 ]]; then continue; fi
-    # shellcheck disable=SC2068
-    eval ${CMD[@]} | tee -a "$LOG_PATH"
+    if [[ $USE_SUDO -eq 1 ]]; then
+      sudo "$DTC_BIN" -f"$pref" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -r"$REVS" | tee -a "$LOG_PATH"
+    else
+      "$DTC_BIN" -f"$pref" -i0 -d"$DRIVE" -s"$t" -e"$t" -g"$s" -r"$REVS" | tee -a "$LOG_PATH"
+    fi
     sleep 0.2
   done
   popd >/dev/null
