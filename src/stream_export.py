@@ -39,7 +39,7 @@ def write_kryoflux_stream(
     rpm: float | None = None,
     sck_hz: float = 24000000.0,
     rev_lengths: List[int] | None = None,
-    header_mode: str = 'ascii',
+    header_mode: str = 'oob',
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
@@ -110,16 +110,14 @@ def write_kryoflux_stream(
 
     # Build stream that begins with sample clock OOB (type=8) and an OOB info block (type=4)
     stream = bytearray()
-    # OOB type 8: sample clock in Hz as uint32 LE
     try:
         sck_u32 = int(round(float(sck_hz))) & 0xFFFFFFFF
         stream.extend(oob_block(8, struct.pack('<I', sck_u32)))
     except Exception:
-        # Fallback: still emit info text if packing fails
         pass
-    info_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
+    info_txt = f"KryoFlux stream - version {version}\x00"
     stream.extend(oob_block(4, info_txt.encode('ascii')))
-    # Optional initial index marker so streams clearly start at an index boundary
+    # Initial index marker at start-of-stream
     stream.extend(oob_block(2))
 
     pos = 0
@@ -143,7 +141,7 @@ def write_kryoflux_stream(
     with open(p, 'wb') as f:
         # Header mode: ascii (preamble) or oob (start with OOB info block)
         if str(header_mode).lower() == 'ascii':
-            pre_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
+            pre_txt = f"KryoFlux stream - version {version}"
             preamble = pre_txt.encode('ascii', errors='ignore') + b"\x00"
             f.write(preamble)
         # Write C2/OOB stream
