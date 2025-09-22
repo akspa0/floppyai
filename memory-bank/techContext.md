@@ -16,23 +16,23 @@ pip install -r requirements.txt
 ```
 
 ## Repository Layout (relevant)
-- `FloppyAI/src/main.py` — CLI entrypoint (module-invoked)
-- `FloppyAI/src/cmd_stream_ops.py` — analyze single stream, read, write, generate, encode
-- `FloppyAI/src/cmd_corpus.py` — corpus aggregation and optional generation of missing maps
-- `FloppyAI/src/cmd_diff.py` — compare reads (diff summary, densities CSV)
-- `FloppyAI/src/analysis/analyze_disk.py` — shim now; Phase 3 will move the pipeline here
-- `FloppyAI/src/analysis/metrics.py` — (planned) metrics for experiments
-- `FloppyAI/src/utils/json_io.py` — `dump_json()` with a custom encoder
-- `FloppyAI/src/utils/io_paths.py` — `get_output_dir()` and labeling helpers
+- `src/main.py` — CLI entrypoint (module-invoked)
+- `src/cmd_stream_ops.py` — analyze single stream, read, write, generate, encode
+- `src/cmd_corpus.py` — corpus aggregation and optional generation of missing maps
+- `src/cmd_diff.py` — compare reads (diff summary, densities CSV)
+- `src/analysis/analyze_disk.py` — shim now; Phase 3 will move the pipeline here
+- `src/analysis/metrics.py` — (planned) metrics for experiments
+- `src/utils/json_io.py` — `dump_json()` with a custom encoder
+- `src/utils/io_paths.py` — `get_output_dir()` and labeling helpers
 
 ## Invocation Pattern
-Run from the repository root using module syntax to ensure imports and subprocess flows resolve:
+Run from the `FloppyAI/` directory using module syntax to ensure imports and subprocess flows resolve:
 ```bash
-python -m FloppyAI.src.main --help
+python -m src.main --help
 ```
 
 Notes:
-- Some flows (e.g., `analyze_corpus --generate-missing`) spawn `python -m FloppyAI.src.main` via subprocess; CWD must be the repo root.
+- Some flows (e.g., `analyze_corpus --generate-missing`) spawn `python -m src.main` via subprocess; CWD must be the `FloppyAI/` directory.
 - `--output-dir` flags are supported by most commands; otherwise a timestamped `test_outputs/<timestamp>/` folder is used.
 
 ## Hardware

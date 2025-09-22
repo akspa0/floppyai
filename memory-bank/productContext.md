@@ -13,7 +13,7 @@ FloppyAI provides a surface-first analysis of floppy media using KryoFlux raw fl
 - Fragmented workflows for generating, writing, capturing, and analyzing experimental streams.
 
 ## How it should work
-- Run from repo root using module syntax: `python -m FloppyAI.src.main`.
+- Run from the `FloppyAI/` directory using module syntax: `python -m src.main`.
 - Each CLI subcommand has a clear purpose and consistent output layout under `test_outputs/<timestamp>/` or a user-provided `--output-dir`.
 - JSON artifacts are consistent and machine-readable (centralized encoder).
 - Experiments are reproducible and documented.

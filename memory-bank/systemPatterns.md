@@ -6,9 +6,9 @@ This document captures architecture, design decisions, and recurring patterns us
 
 - Entry point: `src/main.py` (CLI)
   - Uses `argparse` with subcommands that delegate to command modules.
-  - Must be run from the repository root using module syntax:
+  - Run from the `FloppyAI/` directory using module syntax:
     ```bash
-    python -m FloppyAI.src.main --help
+    python -m src.main --help
     ```
 - Command modules:
   - `src/cmd_stream_ops.py` — analyze single stream, read, write, generate, encode
@@ -37,7 +37,7 @@ This document captures architecture, design decisions, and recurring patterns us
 
 ## Conventions & Patterns
 
-- Invocation pattern: run from repo root using `python -m FloppyAI.src.main` to ensure package resolution in command and subprocess flows.
+- Invocation pattern: run from the `FloppyAI/` directory using `python -m src.main` to ensure package resolution in command and subprocess flows.
 - JSON I/O must use `utils/json_io.dump_json` to normalize numpy, Path, and special values.
 - Output directory policy: all commands accept `--output-dir`; if absent, a timestamped folder under `test_outputs/` is created.
 - Optional LLM summary:
@@ -55,10 +55,10 @@ This document captures architecture, design decisions, and recurring patterns us
 - Pattern generation includes reproducible seeding via `--seed` parameter.
 - Density scaling via `--density` multiplier affects base cell length.
 
-- The CLI sometimes shells out to `python -m FloppyAI.src.main ...` (e.g., corpus generating missing maps):
-  - Set subprocess CWD to the repo root for reliable module resolution.
+- The CLI sometimes shells out to `python -m src.main ...` (e.g., corpus generating missing maps):
+  - Set subprocess CWD to the `FloppyAI/` directory for reliable module resolution.
   - Prefer internal calls where possible to avoid environment skew; use subprocess as a fallback for isolation.
-- New experiment subcommand uses subprocess orchestration: `python -m FloppyAI.src.main experiment matrix` runs generate→write→read→analyze cycles.
+- New experiment subcommand uses subprocess orchestration: `python -m src.main experiment matrix` runs generate→write→read→analyze cycles.
 - Safety defaults: experiments prefer `--simulate` mode and outer tracks (0-9) to minimize hardware risk.
 
 ### KryoFlux Stream Exporter Defaults

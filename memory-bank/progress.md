@@ -9,7 +9,7 @@ Last updated: 2025-09-22 16:40 (local)
 - Experiments docs created: `01-extreme-streams.md`, `02-high-density-encoding.md`, `_template.md`.
 - **Experiments scaffolding completed**: `cmd_experiments.py` with matrix orchestration, `analysis/metrics.py` with comprehensive metrics and plotting.
 - **Enhanced generate command**: Added `--pattern`, `--seed`, `--density` flags with support for `random`, `prbs7`, `alt`, `zeros`, `ones`, `sweep` patterns.
-- **Experiment CLI integrated**: `python -m FloppyAI.src.main experiment matrix` command available.
+- **Experiment CLI integrated**: `python -m src.main experiment matrix` command available.
 - Angular‑resolved instability maps integrated and bright by default (magma_r with percentile contrast) in:
   - `render_instability_map()` (both sides)
   - `render_side_report()` middle‑left panel
@@ -48,7 +48,7 @@ Last updated: 2025-09-22 16:40 (local)
  - STREAM exporter defaults locked; HxC validation positive (loads by default with OOB‑first header). DTC write validation pending.
 
 ## Known Issues / Risks
-- Subprocess `-m` invocations require repo root as CWD; doc emphasizes this.
+- Subprocess `-m` invocations require the `FloppyAI/` directory as CWD; docs emphasize this.
 - Hardware runs require safety gates; defaults will err on caution.
 - LLM summaries require an environment-provided endpoint; not always available.
 - **New**: Experiment matrix runs require KryoFlux hardware for full testing; simulation mode available.
