@@ -59,7 +59,7 @@ chmod +x FloppyAI/scripts/linux/experiment_write_read_analyze.sh
 Notes:
 - `--tracks 0-80` is the standard full range for 3.5" HD. If you want overtracks, use `0-82`.
 - `--header-mode ascii` produces a null‑terminated ASCII preamble for broader tool compatibility; if HxC complains, re‑run with `--header-mode oob`.
-- The script invokes `dtc` to write streams (`-i4 -w`) and to read back captures (`-i0`). Outputs and logs are stored under `FloppyAI/output_captures/experiments/<label>/`.
+- The script attempts to write streams via DTC using STREAM mode (`-i0 -w`, with `-f` prefix first) and then reads back captures (`-i0`). As of 2025‑09‑22, DTC refuses to open generated STREAM files on our test host; see status section below. Outputs and logs are stored under `FloppyAI/output_captures/experiments/<label>/`.
 
 ## How to Run
 
@@ -268,8 +268,20 @@ FloppyAI/scripts/linux/dtc_write_read_set.sh \
 ```
 Details:
 - Accepts sets named `trackNN.S.raw` (e.g., `track00.0.raw`) or `NN.S.raw` (e.g., `00.0.raw`).
-- Uses per‑file bases (`-ftrack00.0` / `-f00.0`) with `-i4 -w` to write, and `-i0` to read back.
+- Attempts STREAM write with `-i0 -w` using `-f` prefix (`-ftrack` or `-f./`) and strict option ordering; read‑back uses `-i0`. As of 2025‑09‑22, DTC rejects generated files for writing; see status section above.
 - Produces captures and a `.log` in `--out-dir` with the exact `dtc` commands used. Sudo is used by default (pass `--no-sudo` to disable).
+
+## Current Status: KryoFlux STREAM writing
+
+- We generate STREAM files (C2 + OOB) per the published protocol. HxC opens and visualizes them (side 0 shows rough flux; side 1 may be sparse depending on pattern), but DTC currently refuses to open them for writing and reports:
+  - `Image name:` / `Can't open image file:`
+- We strictly adhere to DTC CLI ordering (e.g., `-ftrack` or `-f./` first, then `-i0`, `-d`, `-s`, `-e`, `-g`, `-w`) and have tried base variants (`-ftrack`, `-ftrack.raw`, absolute `-f$(pwd)/track`, `-f$(pwd)/track.raw`).
+- Action plan (in progress):
+  - Compare our streams against known‑good DTC captures (same track/side) and align OOB/header exactly to the rev 1.1 spec and empirical DTC expectations (index OOB timer payload included).
+  - Document tested variants and capture results under `docs/`.
+  - Update the exporter once the exact accepted shape is confirmed.
+
+If you are experimenting today, write with HxC (or convert to a format DTC will accept for writing) and use DTC for read‑back captures (`-i0`) until this is resolved.
 
 ## Commands
 

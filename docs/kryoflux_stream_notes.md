@@ -39,9 +39,9 @@ Multiple revolutions and index
 - A complete track capture spans multiple revolutions (often 3–5+). Each revolution boundary should be annotated by an OOB Index (type 0x02).
 - Index timing can be recovered from cumulative SampleCounter and IndexCounter; RPM may be derived between indices.
 
-Header modes we will test
-- OOB-first: Begin with KFInfo (type 0x04), optional initial Index (type 0x02), then ISB samples.
-- ASCII preamble: A null-terminated ASCII info line first (legacy), then OOBs and samples. Our defaults use OOB-first.
+Header modes and defaults
+- ASCII preamble (default): A null-terminated ASCII info line first (legacy), then OOBs and samples. This is our default for best DTC compatibility.
+- OOB-first: Begin with KFInfo (type 0x04), optional initial Index (type 0x02), then ISB samples. Still supported via `--header-mode oob`.
 
 Generator alignment choices (current)
 - Emit KFInfo (type 0x04) with `sck` and `ick` values.
