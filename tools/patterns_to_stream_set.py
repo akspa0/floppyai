@@ -177,12 +177,13 @@ def build_intervals(pattern: str, rev_time_ns: int, **kw) -> List[int]:
 
 
 def main(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(description="Generate NN.S.raw C2/OOB stream set for DTC write-from-stream (-wi4)")
+    ap = argparse.ArgumentParser(description="Generate NN.S.raw C2/OOB stream set for DTC write-from-stream (-i4 -w)")
     ap.add_argument("--tracks", required=True, help="Track spec: 'a-b' or 'list' (e.g., 0-82 or 0,2,4)")
     ap.add_argument("--sides", default="0,1", help="Sides list (default: 0,1)")
     ap.add_argument("--revs", type=int, default=3, help="Revolutions per file (default 3)")
     ap.add_argument("--rev-time-ns", type=int, default=200_000_000, help="Target revolution time in ns (default ~300RPM)")
-    ap.add_argument("--sck-hz", type=float, default=24_027_428.5714285, help="Sample clock for C2 stream (Hz)")
+    ap.add_argument("--sck-hz", type=float, default=24_000_000.0, help="Sample clock for C2 stream (Hz, default 24 MHz)")
+    ap.add_argument("--header-mode", choices=["ascii", "oob"], default="ascii", help="File header style: ascii preamble or start with OOB info (default ascii)")
     ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7"], default="constant")
     ap.add_argument("--interval-ns", type=int, default=4000, help="Constant/ones cell interval (ns)")
     ap.add_argument("--mean-ns", type=float, default=4000.0, help="Random pattern mean interval (ns)")
@@ -235,6 +236,7 @@ def main(argv: List[str]) -> int:
                 num_revs=revs,
                 sck_hz=float(args.sck_hz),
                 rev_lengths=rev_lens,
+                header_mode=str(args.header_mode),
             )
 
     print(f"Generated {len(tracks)*len(sides)} files in {out_dir}")

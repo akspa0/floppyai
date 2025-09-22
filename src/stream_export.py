@@ -37,8 +37,9 @@ def write_kryoflux_stream(
     num_revs: int = 1,
     version: str = '3.50',
     rpm: float | None = None,
-    sck_hz: float = 24027428.5714285,
+    sck_hz: float = 24000000.0,
     rev_lengths: List[int] | None = None,
+    header_mode: str = 'ascii',
 ) -> None:
     """
     Write a KryoFlux C2/OOB stream (simplified but valid) so dtc can ingest it.
@@ -120,7 +121,12 @@ def write_kryoflux_stream(
     stream.extend(oob_block(3))
 
     with open(p, 'wb') as f:
-        # Write pure C2/OOB stream starting with OOB info
+        # Header mode: ascii (preamble) or oob (start with OOB info block)
+        if str(header_mode).lower() == 'ascii':
+            pre_txt = f"KryoFlux DiskSystem, version={version}, sck={sck_hz}, track={track}, side={side}"
+            preamble = pre_txt.encode('ascii', errors='ignore') + b"\x00"
+            f.write(preamble)
+        # Write C2/OOB stream
         f.write(stream)
     try:
         print(f"Wrote KryoFlux C2 stream: track={track} side={side} sck={sck_hz} Hz -> {p}")
