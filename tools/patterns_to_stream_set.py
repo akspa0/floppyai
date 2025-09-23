@@ -45,8 +45,16 @@ import sys
 import math
 import random
 from pathlib import Path
+import shutil
 from typing import List, Tuple
 import importlib
+from typing import Optional, Dict, Any
+
+# Optional image support for 'image' pattern (silkscreen)
+try:
+    from PIL import Image
+except Exception:
+    Image = None  # type: ignore
 
 # Ensure repo root on sys.path so we can import FloppyAI.src.* regardless of CWD
 HERE = Path(__file__).resolve()
@@ -55,7 +63,7 @@ SRC_DIR = REPO_ROOT / "FloppyAI" / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from stream_export import write_kryoflux_stream  # type: ignore
+# Lazy import writers close to use-site to avoid hard deps (e.g., numpy) when not needed
 
 
 def parse_range(spec: str) -> List[int]:
@@ -106,6 +114,75 @@ def gen_random_intervals(rev_time_ns: int, mean_ns: float, std_ns: float) -> Lis
     return intervals
 
 
+def gen_alt_intervals(rev_time_ns: int, long_ns: int, short_ns: int, segments: int = 64) -> List[int]:
+    # Time-domain bars within one revolution: split into segments and alternate long/short
+    segments = max(2, int(segments))
+    base = []
+    use_long = True
+    for _ in range(segments):
+        base.append(max(50, int(long_ns if use_long else short_ns)))
+        use_long = not use_long
+    # Normalize to target rev_time by scaling last cell
+    total = sum(base)
+    if total <= 0:
+        return [rev_time_ns]
+    scale = rev_time_ns / float(total)
+    scaled = [max(50, int(round(v * scale))) for v in base]
+    diff = rev_time_ns - sum(scaled)
+    scaled[-1] = max(50, scaled[-1] + diff)
+    return scaled
+
+
+def gen_sweep_intervals(rev_time_ns: int, sweep_min: int, sweep_max: int, steps: int = 128) -> List[int]:
+    steps = max(2, int(steps))
+    raw = [int(max(50, sweep_min + (sweep_max - sweep_min) * i / (steps - 1))) for i in range(steps)]
+    intervals: List[int] = []
+    total = 0
+    i = 0
+    while total < rev_time_ns:
+        ns = raw[i % len(raw)]
+        intervals.append(ns)
+        total += ns
+        i += 1
+    if intervals:
+        intervals[-1] = max(50, intervals[-1] - (total - rev_time_ns))
+    return intervals
+
+
+def gen_image_intervals(
+    rev_time_ns: int,
+    image_path: str,
+    long_ns: int,
+    short_ns: int,
+    row_fraction: float = 0.0,
+    threshold: int = 140,
+) -> List[int]:
+    if Image is None:
+        raise RuntimeError("Pillow (PIL) is required for --pattern image. Please pip install pillow.")
+    img = Image.open(image_path).convert("L")
+    # Decide number of columns (cells per revolution) from target timing
+    avg_cell = max(50, int(round((long_ns + short_ns) / 2)))
+    columns = max(16, int(round(rev_time_ns / float(avg_cell))))
+    # Resize image width to columns, keep height
+    w, h = img.size
+    if w != columns:
+        img = img.resize((columns, h))
+        w, h = img.size
+    # Choose the row based on track position (0..1), clamp
+    rf = 0.0 if h <= 1 else max(0.0, min(1.0, row_fraction))
+    row_idx = int(round(rf * (h - 1))) if h > 1 else 0
+    px = img.getdata()
+    # Extract one row
+    row: List[int] = [px[row_idx * w + x] for x in range(w)]
+    # Map to intervals
+    intervals = [max(50, int(short_ns if v < threshold else long_ns)) for v in row]
+    # Adjust last interval to hit target rev_time_ns exactly
+    total = sum(intervals)
+    if intervals:
+        intervals[-1] = max(50, intervals[-1] + (rev_time_ns - total))
+    return intervals
+
+
 def build_intervals(pattern: str, rev_time_ns: int, **kw) -> List[int]:
     pattern = pattern.lower().strip()
     if pattern == "constant":
@@ -113,19 +190,13 @@ def build_intervals(pattern: str, rev_time_ns: int, **kw) -> List[int]:
     elif pattern == "random":
         return gen_random_intervals(rev_time_ns, float(kw.get("mean_ns", 4000.0)), float(kw.get("std_ns", 400.0)))
     elif pattern == "alt":
-        long_ns = int(kw.get("long_ns", 4000))
-        short_ns = int(kw.get("short_ns", 2000))
-        intervals: List[int] = []
-        total = 0
-        toggle = True
-        while total < rev_time_ns:
-            ns = max(50, long_ns if toggle else short_ns)
-            intervals.append(ns)
-            total += ns
-            toggle = not toggle
-        if intervals:
-            intervals[-1] = max(50, intervals[-1] - (total - rev_time_ns))
-        return intervals
+        # Alternate long/short in fixed segments across the revolution
+        return gen_alt_intervals(
+            rev_time_ns,
+            int(kw.get("long_ns", 4000)),
+            int(kw.get("short_ns", 2000)),
+            int(kw.get("segments", 64)),
+        )
     elif pattern == "zeros":
         # Long cells only
         return gen_constant_intervals(rev_time_ns, int(kw.get("long_ns", kw.get("interval_ns", 4000))))
@@ -133,24 +204,22 @@ def build_intervals(pattern: str, rev_time_ns: int, **kw) -> List[int]:
         # Short cells only
         return gen_constant_intervals(rev_time_ns, int(kw.get("short_ns", 2000)))
     elif pattern == "sweep":
-        sweep_min = int(kw.get("sweep_min_ns", 2000))
-        sweep_max = int(kw.get("sweep_max_ns", 6000))
-        # Create a linear sweep across the revolution
-        steps = max(2, int(round(rev_time_ns / ((sweep_min + sweep_max) / 2.0))))
-        # Ensure at least a handful of steps
-        steps = max(16, steps)
-        raw = [int(max(50, sweep_min + (sweep_max - sweep_min) * i / (steps - 1))) for i in range(steps)]
-        intervals: List[int] = []
-        total = 0
-        i = 0
-        while total < rev_time_ns:
-            ns = raw[i % len(raw)]
-            intervals.append(ns)
-            total += ns
-            i += 1
-        if intervals:
-            intervals[-1] = max(50, intervals[-1] - (total - rev_time_ns))
-        return intervals
+        return gen_sweep_intervals(
+            rev_time_ns,
+            int(kw.get("sweep_min_ns", 2000)),
+            int(kw.get("sweep_max_ns", 6000)),
+            int(kw.get("steps", 128)),
+        )
+    elif pattern == "image":
+        # Silkscreen: map one image row to a revolution (radial-style)
+        return gen_image_intervals(
+            rev_time_ns=rev_time_ns,
+            image_path=str(kw.get("image")),
+            long_ns=int(kw.get("long_ns", 4200)),
+            short_ns=int(kw.get("short_ns", 2200)),
+            row_fraction=float(kw.get("row_fraction", 0.0)),
+            threshold=int(kw.get("threshold", 140)),
+        )
     elif pattern == "prbs7":
         # Simple PRBS7 LFSR-based bitstream mapping: 0->long, 1->short
         long_ns = int(kw.get("long_ns", 4000))
@@ -197,7 +266,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--clock-info", action="store_true", help="Emit KFInfo 'sck=..., ick=...' string (off by default)")
     ap.add_argument("--hw-info", action="store_true", help="Emit extended HW info KFInfo (host_date, name, hwid, etc.) (off by default)")
     ap.add_argument("--ick-hz", type=float, default=3003428.5714, help="Index clock frequency (Hz) for OOB counters (default ~3.003 MHz)")
-    ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7"], default="constant")
+    ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7", "image"], default="constant")
     ap.add_argument("--interval-ns", type=int, default=4000, help="Constant/ones cell interval (ns)")
     ap.add_argument("--mean-ns", type=float, default=4000.0, help="Random pattern mean interval (ns)")
     ap.add_argument("--std-ns", type=float, default=400.0, help="Random pattern stddev interval (ns)")
@@ -205,9 +274,47 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--short-ns", type=int, default=2000, help="Short cell interval for alt/ones/prbs7 (ns)")
     ap.add_argument("--sweep-min-ns", type=int, default=2000, help="Sweep minimum interval (ns)")
     ap.add_argument("--sweep-max-ns", type=int, default=6000, help="Sweep maximum interval (ns)")
+    ap.add_argument("--steps", type=int, default=128, help="Sweep/alt segments (default 128)")
     ap.add_argument("--seed", type=int, default=0, help="Seed for PRBS/random generation (0 = unseeded)")
+    # Image/silkscreen options
+    ap.add_argument("--image", help="Path to input image for --pattern image")
+    ap.add_argument("--threshold", type=int, default=140, help="Binarization threshold for image pattern (0..255)")
+    # Profile preset (shortcuts for common configurations)
+    ap.add_argument("--profile", help="Preset profile name to avoid long CLI chains")
     ap.add_argument("--output-dir", required=True, help="Directory to write NN.S.raw set")
     args = ap.parse_args(argv)
+
+    # Built-in profiles to minimize CLI typing
+    PROFILES: Dict[str, Dict[str, Any]] = {
+        # Simple baselines
+        "constant-4us": {"pattern": "constant", "interval_ns": 4000, "revs": 3, "writer": "strict-dtc"},
+        "alt-4us-2us": {"pattern": "alt", "long_ns": 4000, "short_ns": 2000, "steps": 128, "revs": 3, "writer": "strict-dtc"},
+        "sweep-2to6us": {"pattern": "sweep", "sweep_min_ns": 2000, "sweep_max_ns": 6000, "steps": 128, "revs": 3, "writer": "strict-dtc"},
+        "prbs7-default": {"pattern": "prbs7", "long_ns": 4200, "short_ns": 2200, "revs": 3, "writer": "strict-dtc"},
+        # Image/silkscreen (radial)
+        "image-radial": {"pattern": "image", "threshold": 140, "long_ns": 4200, "short_ns": 2200, "revs": 3, "writer": "strict-dtc"},
+    }
+
+    def apply_profile(a) -> None:
+        if not a.profile:
+            return
+        p = PROFILES.get(a.profile.strip().lower())
+        if not p:
+            print(f"Unknown profile: {a.profile}", file=sys.stderr)
+            return
+        # Apply profile values if the user did not explicitly override them
+        for k, v in p.items():
+            if not hasattr(a, k):
+                continue
+            cur = getattr(a, k)
+            # Treat falsy defaults as unset when profile supplies a value
+            if cur in (None, 0, False, ""):
+                setattr(a, k, v)
+        # Always apply pattern & writer from profile
+        setattr(a, "pattern", p.get("pattern", a.pattern))
+        setattr(a, "writer", p.get("writer", a.writer))
+
+    apply_profile(args)
 
     tracks = parse_range(args.tracks)
     if not tracks:
@@ -218,12 +325,15 @@ def main(argv: List[str]) -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for t in tracks:
+    total_tracks = len(tracks)
+    for idx_t, t in enumerate(tracks):
         for s in sides:
             # Generate intervals per revolution and concatenate across revs
             intervals: List[int] = []
             rev_lens: List[int] = []
             for _ in range(revs):
+                # Pass track-relative progress for image mapping (0..1)
+                row_fraction = (idx_t / (total_tracks - 1)) if total_tracks > 1 else 0.0
                 part = build_intervals(
                     pattern=args.pattern,
                     rev_time_ns=int(args.rev_time_ns),
@@ -235,6 +345,10 @@ def main(argv: List[str]) -> int:
                     sweep_min_ns=int(args.sweep_min_ns),
                     sweep_max_ns=int(args.sweep_max_ns),
                     seed=int(args.seed),
+                    steps=int(args.steps),
+                    image=args.image,
+                    threshold=int(args.threshold),
+                    row_fraction=float(row_fraction),
                 )
                 intervals.extend(part)
                 rev_lens.append(len(part))
@@ -280,7 +394,18 @@ def main(argv: List[str]) -> int:
                     include_initial_index=(True if args.initial_index and not args.no_initial_index else False),
                     ick_hz=float(args.ick_hz),
                 )
+                # Also write a duplicate NN.S.raw for maximum DTC compatibility across builds
+                dup_name = f"{int(t):02d}.{int(s)}.raw"
+                dup_path = out_dir / dup_name
+                try:
+                    shutil.copyfile(fpath, dup_path)
+                except Exception:
+                    # Fallback: read/write if copyfile not possible across FS
+                    data = Path(fpath).read_bytes()
+                    dup_path.write_bytes(data)
             else:
+                se_mod = importlib.import_module("stream_export")
+                write_kryoflux_stream = getattr(se_mod, "write_kryoflux_stream")
                 write_kryoflux_stream(
                     intervals,
                     track=int(t),

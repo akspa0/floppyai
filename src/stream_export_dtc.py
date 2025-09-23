@@ -2,7 +2,6 @@ import struct
 from pathlib import Path
 from typing import List
 from datetime import datetime
-import numpy as np
 
 # DTC-style STREAM writer
 # Matches real DTC OOB ordering/content more closely to maximize acceptance by KryoFlux software.
@@ -72,8 +71,9 @@ def write_kryoflux_stream_dtc(
     # Prepare revolution splits
     if num_revs <= 0:
         num_revs = 1
-    intervals = np.asarray(flux_intervals, dtype=np.uint64)
-    n = int(intervals.size)
+    # Use plain Python lists to avoid hard numpy dependency
+    intervals = list(flux_intervals)
+    n = len(intervals)
     if rev_lengths is not None and len(rev_lengths) == num_revs:
         splits = list(rev_lengths)
     else:

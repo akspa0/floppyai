@@ -1,40 +1,19 @@
 # Progress — FloppyAI
 
-Last updated: 2025-09-22 16:40 (local)
+Last updated: 2025-09-23 03:11 (local)
 
 ## What Works
-- Modular CLI wiring: `cmd_stream_ops.py`, `cmd_corpus.py`, `cmd_diff.py` integrated into `main.py`.
-- `main.py` now delegates to modules and uses `utils.json_io.dump_json` for JSON writes (major sites replaced).
-- Documentation refreshed: README, usage, cheatsheet, docs index, and experiments docs.
-- Experiments docs created: `01-extreme-streams.md`, `02-high-density-encoding.md`, `_template.md`.
-- **Experiments scaffolding completed**: `cmd_experiments.py` with matrix orchestration, `analysis/metrics.py` with comprehensive metrics and plotting.
-- **Enhanced generate command**: Added `--pattern`, `--seed`, `--density` flags with support for `random`, `prbs7`, `alt`, `zeros`, `ones`, `sweep` patterns.
-- **Experiment CLI integrated**: `python -m src.main experiment matrix` command available.
-- Angular‑resolved instability maps integrated and bright by default (magma_r with percentile contrast) in:
-  - `render_instability_map()` (both sides)
-  - `render_side_report()` middle‑left panel
-  - `render_disk_dashboard()` row 2
-- Sector overlays and per‑track angular templates render consistently across disk surface, side reports, and dashboard; intra‑wedge peak ticks included.
-- CLI simplified with profile‑driven overlays and new profiles: `35DDGCR`, `35HDGCR`, `525DDGCR`.
-  - `--overlay-mode` defaults to `auto`; analyzer picks from profile.
-  - GCR candidates auto‑selected by profile; still overridable.
-- Docs updated: README and `docs/usage.md` reflect simplified commands and brighter instability visuals.
-- New concept page `docs/instability.md` created; cheatsheet updated with an instability quick reference.
-- New CLI `image2flux` subcommand scaffolding added (angular‑only MVP) in `src/encoding/image2flux.py` and wired in `main.py`.
-- STREAM generator defaults finalized: OOB‑first; first OOB at byte 0 is KFInfo `KryoFlux stream - version 3.50` (no NUL); StreamInfo initial+periodic with payload SP equal to actual ISB position; Index per rev; StreamEnd then EOF. HxC loads our generated streams by default.
+- **Strict DTC writer accepted by dtc:** Our streams are now recognized and dtc starts writing.
+- **CAPS/C2‑aligned exporter:** `src/stream_export_dtc.py` + `src/stream_export_dtc_strict.py` implement OOB‑first Info‑first, Index payload `(SP, last_flux_ticks, round(elapsed_sck_seconds*ick_hz))`, dummy flux after last index, StreamEnd then EOF.
+- **Deterministic headers:** KFInfo sck/ick text snapped to reference; Info payloads padded to 47/141 bytes.
+- **Generator profiles:** `tools/patterns_to_stream_set.py` now supports `--profile` presets and `--pattern image` (silkscreen) mapping rows→tracks; minimal CLI typing.
+- **dtc Linux wrapper updated:** Uses `-f <prefix>` spacing and logs exact commands; generates both `trackNN.S.raw` and `NN.S.raw` for max compatibility.
 
 ## What's Left
-- Phase 2: finish migrating leftover `json.dump` sites to `utils.json_io.dump_json` (verify all in `main.py` and commands).
-- Phase 3: move `analyze_disk()` implementation into `analysis/analyze_disk.py` and update CLI to prefer shim.
-- Add safety gates for hardware runs with `--simulate` default and outer track preferences.
-- Document Linux-side hardware scripts for DTC host usage (sudo), and reference them from docs (`usage.md`, experiments).
-- Establish manual cross-machine workflow for experiments: generate on Windows → transfer to Linux → run scripts → bring captures back → analyze on Windows.
-- Optional: add `--overlay-fill` to softly shade sectors for visibility.
-- Continue Phase 2 cleanup: ensure all JSON writes use `utils.json_io.dump_json`.
-- Validate overlay heuristics across more datasets (MFM and GCR; zoned tracks) and tune defaults if needed.
-- Implement `structure_finder` (pattern reconstruction) and integrate round‑trip metrics (correlation, phase), add end‑to‑end tutorial assets.
-- Add Linux write/read script in `scripts/linux/` and document exact flags and safety notes.
-- Validate DTC write‑from‑stream (`-i0 -w`) using correct `-f` prefix (`.../track`) and a small track set. Publish confirmed command lines.
+- Implement `tools/structure_finder.py` to reconstruct per‑side composites from read‑back sets (no per‑track PNG spam) and compute correlation to intended pattern/image.
+- Add `docs/silkscreen_pipeline.md` and profile quickstart in `docs/profiles.md`.
+- Optional: externalize profiles to `profiles.yaml` for easier user customization.
+- Phase 2/3 CLI cleanup tasks continue (JSON I/O centralization, `analysis/` migration).
 
 ## Current Status
 - Phase 1: completed.
@@ -42,19 +21,19 @@ Last updated: 2025-09-22 16:40 (local)
 - Phase 3: pending.
 - Experiments: **scaffolding complete**; ready for testing and refinement.
 - Decision recorded: do not implement or rely on a cross-machine DTC wrapper; hardware steps will be executed manually on the Linux DTC host via bash scripts.
+- Strict DTC writer: implemented and accepted by dtc (begins writing), confirming stream format correctness.
+- Hardware write errors on current host traced to USB controller behavior; move to older PC/USB2‑native recommended.
+- Profiles and image silkscreen supported; ready for end‑to‑end tests once hardware path is stable.
 - Visualization and overlay pipeline stabilized; default outputs are forensic‑rich without per‑track PNG spam.
 - Profiles reduce CLI complexity while preserving expert overrides.
 - Cross‑machine workflow remains manual via Linux DTC scripts per project decision.
  - STREAM exporter defaults locked; HxC validation positive (loads by default with OOB‑first header). DTC write validation pending.
 
 ## Known Issues / Risks
-- Subprocess `-m` invocations require the `FloppyAI/` directory as CWD; docs emphasize this.
-- Hardware runs require safety gates; defaults will err on caution.
-- LLM summaries require an environment-provided endpoint; not always available.
-- **New**: Experiment matrix runs require KryoFlux hardware for full testing; simulation mode available.
-- **Cross-machine**: No SSH orchestration from Windows. Manual artifact transfer between Windows and Linux is assumed; ensure consistent labeling and paths.
-- Weak or highly zoned GCR may still lower side‑level confidence; per‑track inspection in `surface_map.json` recommended.
-- LLM summary features depend on local endpoint availability.
+- USB 3.x controllers often deprecate/poorly support bulk streaming required by KryoFlux; streaming device errors likely on modern hosts.
+- Prefer older PCs/USB2 hubs/controllers; ensure stable 5V/12V for 5.25" drives; confirm write‑protect off.
+- Subprocess `-m` invocations require `FloppyAI/` as CWD; docs emphasize this.
+- Hardware runs require safety defaults; use sacrificial media and small track ranges first.
 
 ## Next Steps
 - Test experiment matrix functionality with `--simulate` mode.
