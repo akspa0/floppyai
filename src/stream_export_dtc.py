@@ -99,10 +99,22 @@ def write_kryoflux_stream_dtc(
     # KFInfo #2: device info + sck/ick (no NUL terminator)
     dev_date = now.strftime('%b %d %Y')   # e.g., "Mar 27 2018"
     dev_time = now.strftime('%H:%M:%S')
-    # Print clocks with high precision similar to DTC dumps (trim trailing zeros)
+    # Print clocks matching DTC reference formatting when near canonical values.
+    # Reference strings (from real DTC captures):
+    #   sck=24027428.5714285
+    #   ick=3003428.5714285625
     def fmt_float(v: float) -> str:
-        s = f"{float(v):.16f}".rstrip('0').rstrip('.')
-        return s
+        try:
+            # Snap to canonical text when within a tiny epsilon
+            if abs(v - 24027428.5714285) < 1e-3:
+                return '24027428.5714285'
+            if abs(v - 3003428.5714285625) < 1e-4:
+                return '3003428.5714285625'
+            # Fallback: trim to <= 10 decimals sans trailing zeros
+            s = f"{float(v):.10f}".rstrip('0').rstrip('.')
+            return s
+        except Exception:
+            return str(v)
     info2 = (
         f"name=KryoFlux DiskSystem, version={version}, date={dev_date}, time={dev_time}, "
         f"hwid=1, hwrv=1, hs=1, sck={fmt_float(sck_hz)}, ick={fmt_float(ick_hz)}"
@@ -154,14 +166,15 @@ def write_kryoflux_stream_dtc(
                     next_streaminfo += int(streaminfo_chunk_bytes)
 
         # At rev boundary emit Index (Type 0x02)
-        # DTC semantics: payload fields are (StreamPosition, timer, systime)
+        # Payload fields (per CAPS/C2 definitions): (StreamPosition, timer, systime)
+        # For DTC file compatibility in practice:
         # - timer: ticks of the last emitted flux (since previous flux) -> last_ticks
-        # - systime: cumulative sample clock ticks since stream start -> total_sck_ticks
-        # This matches real DTC captures where the third field is a large, monotonically increasing value
-        # (diff ~ sample clock per revolution), not an index-clock based counter.
+        # - systime: index clock ticks since stream start -> round(elapsed_seconds * ick_hz)
+        # The absolute baseline in real captures can be large; we start at ~0 which is acceptable for writing.
         sample_since_last_flux = int(last_ticks)
-        systime_ticks = int(total_sck_ticks)
-        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(systime_ticks))
+        elapsed_seconds = float(total_sck_ticks) / float(sck_hz) if sck_hz > 0 else 0.0
+        index_counter = int(round(elapsed_seconds * float(ick_hz)))
+        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(index_counter))
         stream.extend(oob_block(0x02, payload))
 
     # Ensure at least one flux cell after the final Index so all parsers register it
