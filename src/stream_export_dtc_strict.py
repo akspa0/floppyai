@@ -39,6 +39,11 @@ def write_kryoflux_stream_dtc_strict(
     include_streaminfo: bool = True,
     streaminfo_chunk_bytes: int = 32756,
     streaminfo_transfer_ms: int = 170,
+    # Safe-writer sanitizer (enabled by default)
+    sanitize: bool = True,
+    sanitize_min_ns: int = 2400,
+    sanitize_keepalive_ns: int = 4_000_000,
+    sanitize_max_ns: int = 50_000_000,
 ) -> None:
     """Write a DTC-compatible STREAM with enforced OOB-first header and KFInfo semantics."""
     # Force OOB-first header regardless of caller input
@@ -65,4 +70,8 @@ def write_kryoflux_stream_dtc_strict(
         include_streaminfo=include_streaminfo,
         streaminfo_chunk_bytes=streaminfo_chunk_bytes,
         streaminfo_transfer_ms=streaminfo_transfer_ms,
+        sanitize=sanitize,
+        sanitize_min_ns=sanitize_min_ns,
+        sanitize_keepalive_ns=sanitize_keepalive_ns,
+        sanitize_max_ns=sanitize_max_ns,
     )
