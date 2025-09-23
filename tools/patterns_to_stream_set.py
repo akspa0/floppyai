@@ -54,7 +54,7 @@ SRC_DIR = REPO_ROOT / "FloppyAI" / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from stream_export_dtc import write_kryoflux_stream_dtc  # type: ignore
+from stream_export import write_kryoflux_stream  # type: ignore
 
 
 def parse_range(spec: str) -> List[int]:
@@ -182,17 +182,18 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--sides", default="0,1", help="Sides list (default: 0,1)")
     ap.add_argument("--revs", type=int, default=3, help="Revolutions per file (default 3)")
     ap.add_argument("--rev-time-ns", type=int, default=200_000_000, help="Target revolution time in ns (default ~300RPM)")
-    ap.add_argument("--sck-hz", type=float, default=24_000_000.0, help="Sample clock for C2 stream (Hz, default 24 MHz)")
+    ap.add_argument("--sck-hz", type=float, default=24_027_428.5714285, help="Sample clock for C2 stream (Hz, default ~24.0274286 MHz)")
     ap.add_argument("--header-mode", choices=["ascii", "oob"], default="oob", help="File header style: ascii preamble or start with OOB info (default oob)")
-    ap.add_argument("--version-string", default="3.00s", help="Version text for ASCII preamble and KFInfo (e.g., 3.00s, 3.50); default 3.00s")
+    ap.add_argument("--version-string", default="3.50", help="Version text for ASCII preamble and KFInfo (default 3.50)")
     ap.add_argument("--no-sck-oob", action="store_true", help="DEPRECATED: Ignored (Type 0x08 Sample Clock OOB is not emitted)")
     # Initial index handling: default is OFF for compatibility
     ap.add_argument("--initial-index", action="store_true", help="Emit an initial OOB index marker at start (default off)")
     ap.add_argument("--no-initial-index", action="store_true", help="DEPRECATED: same as default; prefer --initial-index to enable")
     # KFInfo toggles
     ap.add_argument("--no-kf-version-info", action="store_true", help="Do not emit KFInfo 'KryoFlux stream - version ...' string")
-    ap.add_argument("--no-clock-info", action="store_true", help="Do not emit KFInfo 'sck=..., ick=...' string")
-    ap.add_argument("--hw-info", action="store_true", help="Emit extended HW info KFInfo (host_date, name, hwid, etc.)")
+    ap.add_argument("--no-clock-info", action="store_true", help="DEPRECATED: Clocks are disabled by default; use --clock-info to enable")
+    ap.add_argument("--clock-info", action="store_true", help="Emit KFInfo 'sck=..., ick=...' string (off by default)")
+    ap.add_argument("--hw-info", action="store_true", help="Emit extended HW info KFInfo (host_date, name, hwid, etc.) (off by default)")
     ap.add_argument("--ick-hz", type=float, default=3003428.5714, help="Index clock frequency (Hz) for OOB counters (default ~3.003 MHz)")
     ap.add_argument("--pattern", choices=["constant", "random", "alt", "zeros", "ones", "sweep", "prbs7"], default="constant")
     ap.add_argument("--interval-ns", type=int, default=4000, help="Constant/ones cell interval (ns)")
@@ -238,7 +239,7 @@ def main(argv: List[str]) -> int:
             # Write trackNN.S.raw (provide exact per-rev lengths to align OOB indices)
             fname = f"track{t:02d}.{int(s)}.raw"
             fpath = out_dir / fname
-            write_kryoflux_stream_dtc(
+            write_kryoflux_stream(
                 intervals,
                 track=int(t),
                 side=int(s),
@@ -252,8 +253,8 @@ def main(argv: List[str]) -> int:
                 include_initial_index=(True if args.initial_index and not args.no_initial_index else False),
                 ick_hz=float(args.ick_hz),
                 include_kf_version_info=True,
-                include_clock_info=(not args.no_clock_info),
-                include_hw_info=True,
+                include_clock_info=bool(getattr(args, "clock_info", False)),
+                include_hw_info=bool(getattr(args, "hw_info", False)),
             )
 
     print(f"Generated {len(tracks)*len(sides)} files in {out_dir}")

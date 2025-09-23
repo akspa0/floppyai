@@ -169,6 +169,7 @@ def write_kryoflux_stream(
         stream.extend(oob_block(0x02, payload))
 
     pos = 0
+    last_ticks = 0
     for i, cnt in enumerate(splits):
         if cnt <= 0:
             # Still write an index block for an empty revolution
@@ -186,6 +187,7 @@ def write_kryoflux_stream(
             isb_bytes += len(enc)
             total_sck_ticks += int(t)
             rev_ticks += int(t)
+            last_ticks = int(t)
             # Periodic StreamInfo based on ISB byte count; payload SP = actual ISB bytes at insertion
             if include_streaminfo and next_streaminfo > 0:
                 while isb_bytes >= next_streaminfo:
@@ -193,15 +195,23 @@ def write_kryoflux_stream(
                     tt = int(streaminfo_transfer_ms)
                     stream.extend(oob_block(0x01, struct.pack('<II', sp, tt)))
                     next_streaminfo += int(streaminfo_chunk_bytes)
-        # At the index boundary, SampleCounter is ticks since last flux to index.
-        # Our generator aligns the boundary exactly, so this is typically 0.
-        sample_since_last_flux = 0
+        # At the index boundary, SampleCounter is ticks since last flux to index (use last emitted flux ticks).
+        sample_since_last_flux = int(last_ticks)
         # Compute IndexCounter via elapsed seconds * ick_hz using total_sck_ticks
         elapsed_seconds = float(total_sck_ticks) / float(sck_hz) if sck_hz > 0 else 0.0
         index_counter = int(round(elapsed_seconds * float(ick_hz)))
         # OOB Index marker (Type 0x02) with 12-byte payload
         payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(index_counter))
         stream.extend(oob_block(0x02, payload))
+
+    # Ensure at least one flux cell after the final Index so all parsers register it
+    dummy_ticks = int(round(float(sck_hz) * 12e-6))  # ~12us
+    if dummy_ticks <= 0:
+        dummy_ticks = 1
+    enc = encode_ticks(dummy_ticks)
+    stream.extend(enc)
+    isb_bytes += len(enc)
+    total_sck_ticks += int(dummy_ticks)
 
     # OOB StreamEnd (Type 0x03): 8-byte payload (LE32 StreamPosition, LE32 ResultCode)
     stream.extend(oob_block(0x03, struct.pack('<II', int(isb_bytes), 0)))
