@@ -14,7 +14,7 @@ Important notes:
 - Python 3.10+
 - Install dependencies:
   ```bash
-  pip install -r FloppyAI/requirements.txt
+  pip install -r requirements.txt
   ```
 - Suggested: SSD for faster I/O.
 
@@ -25,7 +25,7 @@ Important notes:
 Generate a small wedges test (3.5" HD, 300 RPM) for tracks 0–3, both sides present:
 
 ```powershell
-python FloppyAI/src/main.py silkscreen_pattern wedges \
+python src/main.py silkscreen_pattern wedges \
   --side 0 \
   --tracks 0-3 \
   --rpm 300 \
@@ -45,7 +45,7 @@ Outputs:
 Use any image; it will be resampled to the (tracks × angle) polar grid.
 
 ```powershell
-python FloppyAI/src/main.py silkscreen .\my_image.png \
+python src/main.py silkscreen .\my_image.png \
   --side 0 \
   --tracks 0-81 \
   --rpm 300 \
@@ -73,7 +73,7 @@ Outputs go to: `test_outputs/<timestamp>/silkscreen/my_image_hd/` with the same 
 
 ### Profiles and sck
 
-- Profiles (JSON under `FloppyAI/profiles/`) provide friendly defaults for RPM, safe track limits, analyzer thresholds, and overlay hints.
+- Profiles (JSON under `profiles/`) provide friendly defaults for RPM, safe track limits, analyzer thresholds, and overlay hints.
   - Pass `--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR|auto`.
   - If neither `--profile` nor `--rpm` is given, the CLI defaults to `RPM=300.0` and prints a warning.
 - sck (sample clock) is the KryoFlux device sampling frequency embedded in streams; it is not the disk RPM and not a “clock track”.
@@ -155,14 +155,14 @@ Recommendations:
 Analyze the captured streams:
 
 ```powershell
-python FloppyAI/src/main.py analyze_disk .\captures\wedges_test --rpm 300 --output-dir .\test_outputs\an_wedges
+python src/main.py analyze_disk .\captures\wedges_test --rpm 300 --output-dir .\test_outputs\an_wedges
 ```
 
 Reconstruct the image (“structure finder”) and compare against ground truth:
 
 ```powershell
 # Typically you will find surface_map.json inside the per-disk analysis output
-python FloppyAI/src/main.py recover_image .\test_outputs\an_wedges\disks\wedges_test\surface_map.json \
+python src/main.py recover_image .\test_outputs\an_wedges\disks\wedges_test\surface_map.json \
   --side 0 \
   --angular-bins 720 \
   --output-dir .\test_outputs\recovery_wedges

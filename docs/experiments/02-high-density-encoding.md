@@ -27,7 +27,7 @@ Characterize how increasing nominal bit density impacts stability, jitter, and r
 
 - Dry-run matrix:
   ```bash
-  python FloppyAI/src/main.py experiment \
+  python src/main.py experiment \
     --patterns prbs7 \
     --densities 0.8,1.0,1.2,1.5,1.8,2.0 \
     --tracks 79-83 --sides 0 \
@@ -37,7 +37,7 @@ Characterize how increasing nominal bit density impacts stability, jitter, and r
 
 - Minimal hardware run (single cell):
   ```bash
-  python FloppyAI/src/main.py experiment \
+  python src/main.py experiment \
     --patterns prbs7 --densities 1.0 --tracks 80 --sides 0 \
     --revs 1 --reps 1 \
     --output-dir .\test_outputs\experiments\density_sweep_sample
@@ -45,7 +45,7 @@ Characterize how increasing nominal bit density impacts stability, jitter, and r
 
 - Direct generation (if running pieces manually):
   ```bash
-  python FloppyAI/src/main.py generate 80 0 \
+  python src/main.py generate 80 0 \
     --revs 1 --density 1.5 --pattern prbs7 --seed 42 \
     --analyze --output-dir .\test_outputs\experiments\gen_density_1p5
   ```

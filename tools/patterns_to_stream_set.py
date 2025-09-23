@@ -187,7 +187,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--header-mode", choices=["ascii", "oob"], default="oob", help="File header style: ascii preamble or start with OOB info (default oob)")
     ap.add_argument("--version-string", default="3.50", help="Version text for ASCII preamble and KFInfo (default 3.50)")
     ap.add_argument("--no-sck-oob", action="store_true", help="DEPRECATED: Ignored (Type 0x08 Sample Clock OOB is not emitted)")
-    ap.add_argument("--writer", choices=["finalized", "dtc"], default="finalized", help="Stream writer: 'finalized' (HxC default) or 'dtc' (DTC-style header)")
+    ap.add_argument("--writer", choices=["finalized", "dtc", "strict-dtc"], default="finalized", help="Stream writer: 'finalized' (HxC default), 'dtc' (DTC-style header), or 'strict-dtc' (byte-compat DTC, OOB-first)")
     # Initial index handling: default is OFF for compatibility
     ap.add_argument("--initial-index", action="store_true", help="Emit an initial OOB index marker at start (default off)")
     ap.add_argument("--no-initial-index", action="store_true", help="DEPRECATED: same as default; prefer --initial-index to enable")
@@ -261,6 +261,24 @@ def main(argv: List[str]) -> int:
                     include_kf_version_info=True,
                     include_clock_info=True if not getattr(args, "no_clock_info", False) else False,
                     include_hw_info=True if getattr(args, "hw_info", False) or True else True,
+                )
+            elif args.writer == "strict-dtc":
+                # Strict DTC writer: OOB-first enforced, KFInfo/clock/hw included by default
+                sds_mod = importlib.import_module("stream_export_dtc_strict")
+                write_kryoflux_stream_dtc_strict = getattr(sds_mod, "write_kryoflux_stream_dtc_strict")
+                write_kryoflux_stream_dtc_strict(
+                    intervals,
+                    track=int(t),
+                    side=int(s),
+                    output_path=str(fpath),
+                    num_revs=revs,
+                    version=str(args.version_string),
+                    sck_hz=float(args.sck_hz),
+                    rev_lengths=rev_lens,
+                    header_mode="oob",  # forced inside strict writer as well
+                    include_sck_oob=(not args.no_sck_oob),
+                    include_initial_index=(True if args.initial_index and not args.no_initial_index else False),
+                    ick_hz=float(args.ick_hz),
                 )
             else:
                 write_kryoflux_stream(

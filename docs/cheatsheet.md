@@ -1,29 +1,29 @@
 # FloppyAI Cheatsheet
 
-Quick-reference for the most common workflows and flags. Run everything from the repository root using the main script. Module syntax is also supported as an alternate.
+Quick-reference for the most common workflows and flags. Run everything from the `FloppyAI/` directory using the main script. Module syntax is also supported as an alternate.
 
 - Show help
   ```bash
-  python FloppyAI/src/main.py --help
+  python src/main.py --help
   ```
 
 ## One‑liners
 
 - Analyze a single .raw file
   ```bash
-  python FloppyAI/src/main.py analyze path\to\file.raw --output-dir .\test_outputs\single
+  python src/main.py analyze path\to\file.raw --output-dir .\test_outputs\single
   ```
 
 - Analyze a full disk directory (PC 3.5" HD, MFM overlays)
   ```bash
-  python FloppyAI/src/main.py analyze_disk path\to\disk_dir \
+  python src/main.py analyze_disk path\to\disk_dir \
     --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\disk_run
   ```
 
 - Analyze a Mac GCR disk (400K/800K, zoned)
   ```bash
-  python FloppyAI/src/main.py analyze_disk path\to\mac_disk \
+  python src/main.py analyze_disk path\to\mac_disk \
     --media-type 35DD --format-overlay --overlay-mode gcr \
     --gcr-candidates "12,10,8,9,11,13" --angular-bins 900 \
     --output-dir .\test_outputs\mac_run
@@ -31,13 +31,13 @@ Quick-reference for the most common workflows and flags. Run everything from the
 
 - Compare two reads (after each has a surface_map.json)
   ```bash
-  python FloppyAI/src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
+  python src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
     --output-dir .\test_outputs\diff_win95
   ```
 
 - Build a corpus, auto‑generating per‑disk maps first
   ```bash
-  python FloppyAI/src/main.py analyze_corpus .\stream_dumps \
+  python src/main.py analyze_corpus .\stream_dumps \
     --generate-missing --media-type 35HD \
     --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\corpus
@@ -85,23 +85,23 @@ Quick-reference for the most common workflows and flags. Run everything from the
 - PC disk (1.44MB) two‑read comparison
   ```bash
   # Read A
-  python FloppyAI/src/main.py analyze_disk FloppyAI\stream_dumps\1.44\win95boot\0 \
+  python src/main.py analyze_disk .\stream_dumps\1.44\win95boot\0 \
     --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\win95_0
 
   # Read B
-  python FloppyAI/src/main.py analyze_disk FloppyAI\stream_dumps\1.44\win95boot\1 \
+  python src/main.py analyze_disk .\stream_dumps\1.44\win95boot\1 \
     --media-type 35HD --format-overlay --overlay-mode mfm --angular-bins 720 \
     --output-dir .\test_outputs\win95_1
 
   # Compare
-  python FloppyAI/src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
+  python src/main.py compare_reads .\test_outputs\win95_0 .\test_outputs\win95_1 \
     --output-dir .\test_outputs\diff_win95
   ```
 
 - Mac corpus (generate + aggregate)
   ```bash
-  python FloppyAI/src/main.py analyze_corpus .\stream_dumps\mac \
+  python src/main.py analyze_corpus .\stream_dumps\mac \
     --generate-missing --media-type 35DD \
     --format-overlay --overlay-mode gcr --gcr-candidates "12,10,8,9,11,13" \
     --angular-bins 900 --output-dir .\test_outputs\corpus_mac
@@ -147,4 +147,4 @@ Quick-reference for the most common workflows and flags. Run everything from the
   - For Mac disks, ensure `--overlay-mode gcr` and pass good `--gcr-candidates`.
 
 - Package not found when using `-m`:
-  - Run from the repository root (the folder that contains `FloppyAI/`).
+  - Run from the `FloppyAI/` directory and use `python -m src.main ...`.

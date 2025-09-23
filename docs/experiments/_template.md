@@ -21,9 +21,9 @@ Short description of the experiment and what it validates.
 
 ## CLI
 
-- Recommended invocation from repository root:
+- Recommended invocation from the `FloppyAI/` directory:
   ```bash
-  python FloppyAI/src/main.py --help
+  python src/main.py --help
   ```
 - Commands used (copy/paste examples):
   - Generation / Write / Read / Analyze

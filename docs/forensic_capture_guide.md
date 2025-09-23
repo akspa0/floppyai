@@ -174,14 +174,14 @@ Copy the capture directory to Windows and run:
 
 PowerShell:
 ```powershell
-python FloppyAI/src/main.py analyze_disk .\captures\win95_set_2025... ^
+python src/main.py analyze_disk .\captures\win95_set_2025... ^
   --profile 35HD --angular-bins 720 ^
   --output-dir .\test_outputs\win95_mfm_full
 ```
 
 Linux/macOS:
 ```bash
-python FloppyAI/src/main.py analyze_disk ./captures/win95_set_2025... \
+python src/main.py analyze_disk ./captures/win95_set_2025... \
   --profile 35HD --angular-bins 720 \
   --output-dir ./test_outputs/win95_mfm_full
 ```
@@ -199,7 +199,7 @@ Outputs in the analysis folder:
 Optional format overlays:
 ```powershell
 # If you want sector boundary lines only (e.g., for clean visuals)
-python FloppyAI/src/main.py analyze_disk <dir> ^
+python src/main.py analyze_disk <dir> ^
   --profile 35HD --angular-bins 720 --format-overlay --overlay-mode mfm ^
   --overlay-sectors-hint 18 ^
   --output-dir .\test_outputs\...

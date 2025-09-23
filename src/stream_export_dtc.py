@@ -153,11 +153,15 @@ def write_kryoflux_stream_dtc(
                     stream.extend(oob_block(0x01, struct.pack('<II', sp, tt)))
                     next_streaminfo += int(streaminfo_chunk_bytes)
 
-        # At rev boundary emit Index (SP=isb_bytes, SampleCounter since last flux to index = last_ticks, IndexCounter via clocks)
-        elapsed_seconds = float(total_sck_ticks) / float(sck_hz) if sck_hz > 0 else 0.0
-        index_counter = int(round(elapsed_seconds * float(ick_hz)))
+        # At rev boundary emit Index (Type 0x02)
+        # DTC semantics: payload fields are (StreamPosition, timer, systime)
+        # - timer: ticks of the last emitted flux (since previous flux) -> last_ticks
+        # - systime: cumulative sample clock ticks since stream start -> total_sck_ticks
+        # This matches real DTC captures where the third field is a large, monotonically increasing value
+        # (diff ~ sample clock per revolution), not an index-clock based counter.
         sample_since_last_flux = int(last_ticks)
-        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(index_counter))
+        systime_ticks = int(total_sck_ticks)
+        payload = struct.pack('<III', int(isb_bytes), int(sample_since_last_flux), int(systime_ticks))
         stream.extend(oob_block(0x02, payload))
 
     # Ensure at least one flux cell after the final Index so all parsers register it

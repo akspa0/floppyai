@@ -1,6 +1,6 @@
 # FloppyAI Refactor Plan
 
-Goal: reduce per-file size to ~750–800 LOC, improve modularity, and keep the CLI stable (`python -m FloppyAI.src.main`).
+Goal: reduce per-file size to ~750–800 LOC, improve modularity, and keep the CLI stable (`python -m src.main`).
 
 ## Principles
 - Thin CLI in `main.py` that only wires argparse subcommands to implementation modules.
@@ -10,7 +10,7 @@ Goal: reduce per-file size to ~750–800 LOC, improve modularity, and keep the C
 
 ## Target Module Layout
 ```
-FloppyAI/src/
+src/
   main.py                              # CLI entry, argparse only
   overlay_detection.py                 # MFM/GCR overlay detection (done)
   rendering.py                         # Polar/overlay/instability rendering (done)

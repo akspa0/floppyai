@@ -1,20 +1,20 @@
 # FloppyAI CLI Usage Guide
 
-This guide shows how to run FloppyAI directly from the repository root using the main script, and includes practical examples for all commands.
+This guide shows how to run FloppyAI directly from the FloppyAI directory using the main script, and includes practical examples for all commands.
 
 ## Invocation
 
-- Always run from the repository root (the folder that contains `FloppyAI/`).
+- Always run from the `FloppyAI/` directory (the folder containing `src/`, `docs/`, etc.).
 - Preferred: direct-run the main script
 
 ```bash
-python FloppyAI/src/main.py --help
+python src/main.py --help
 ```
 
 - Alternate: module syntax also works
 
 ```bash
-python -m FloppyAI.src.main --help
+python -m src.main --help
 ```
 
 ## Environment
@@ -40,7 +40,7 @@ python -m FloppyAI.src.main --help
 Parse a single KryoFlux `.raw` and generate basic statistics and plots.
 
 ```bash
-python FloppyAI/src/main.py analyze path\to\file.raw --output-dir .\test_outputs\single
+python src/main.py analyze path\to\file.raw --output-dir .\test_outputs\single
 ```
 
 Outputs: `<stem>_intervals.png`, `<stem>_hist.png`, and `<stem>_heatmap.png` (if multi‑rev).
@@ -48,7 +48,7 @@ Outputs: `<stem>_intervals.png`, `<stem>_hist.png`, and `<stem>_heatmap.png` (if
 ### 2) read — capture a track/side
 
 ```bash
-python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir DIR]
+python src/main.py read <track> <side> [--revs 3] [--simulate] [--analyze] [--output-dir DIR]
 ```
 
 - `--simulate` avoids real hardware access
@@ -57,13 +57,13 @@ python FloppyAI/src/main.py read <track> <side> [--revs 3] [--simulate] [--analy
 ### 3) write — write a `.raw` to hardware
 
 ```bash
-python FloppyAI/src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir DIR]
+python src/main.py write <input.raw> <track> <side> [--simulate] [--output-dir DIR]
 ```
 
 ### 4) generate — synthetic stream for testing
 
 ```bash
-python FloppyAI/src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir DIR]
+python src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--analyze] [--output-dir DIR]
 ```
 
 - Increase `--revs` to fill more revolutions
@@ -72,14 +72,14 @@ python FloppyAI/src/main.py generate <track> <side> [--revs 1] [--cell 4000] [--
 ### 5) encode — binary → .raw
 
 ```bash
-python FloppyAI/src/main.py encode <input.bin> <track> <side> \
+python src/main.py encode <input.bin> <track> <side> \
   [--density 1.0] [--variable] [--revs 1] [--output OUT.raw] [--write] [--simulate] [--analyze] [--output-dir DIR]
 ```
 
 ### 6) decode — recover binary data from `.raw`
 
 ```bash
-python FloppyAI/src/main.py decode <input.raw> \
+python src/main.py decode <input.raw> \
   [--density 1.0] [--variable] [--revs 1] [--output out.bin] [--expected orig.bin] [--output-dir DIR]
 ```
 
@@ -90,7 +90,7 @@ python FloppyAI/src/main.py decode <input.raw> \
 ### 7) analyze_disk — build a full surface map
 
 ```bash
-python FloppyAI/src/main.py analyze_disk <dir_or_file> \
+python src/main.py analyze_disk <dir_or_file> \
   [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] \
   [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] \
   [--overlay-sectors-hint INT] [--overlay-alpha F] [--overlay-color HEX] \
@@ -119,7 +119,7 @@ Verification steps:
 ### 8) analyze_corpus — aggregate many maps
 
 ```bash
-python FloppyAI/src/main.py analyze_corpus <root_or_map.json> \
+python src/main.py analyze_corpus <root_or_map.json> \
   [--generate-missing] [--rpm FLOAT] [--profile 35HD|35DD|35HDGCR|35DDGCR|525HD|525DD|525DDGCR] \
   [--format-overlay] [--overlay-mode mfm|gcr|auto] [--angular-bins N] [--overlay-sectors-hint INT] \
   [--overlay-alpha F] [--overlay-color HEX] \
@@ -133,7 +133,7 @@ python FloppyAI/src/main.py analyze_corpus <root_or_map.json> \
 ### 9) compare_reads — compare multiple reads of the same disk
 
 ```bash
-python FloppyAI/src/main.py compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
+python src/main.py compare_reads <path_or_dir1> <path_or_dir2> [<...>] [--output-dir DIR]
 ```
 
 - Each argument may be a `surface_map.json` path or a directory containing it
@@ -142,13 +142,13 @@ python FloppyAI/src/main.py compare_reads <path_or_dir1> <path_or_dir2> [<...>] 
 ### 10) classify_surface — quick blank-like vs written-like
 
 ```bash
-python FloppyAI/src/main.py classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
+python src/main.py classify_surface <surface_map.json> [--blank-density-thresh 1000] [--output-dir DIR]
 ```
 
 ### 11) plan_pool — select top‑quality tracks as a bit pool
 
 ```bash
-python FloppyAI/src/main.py plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
+python src/main.py plan_pool <surface_map.json> [--min-density 2000] [--top-percent 0.2] [--output-dir DIR]
 ```
 
 ---
@@ -160,7 +160,7 @@ When KryoFlux DTC hardware is attached to a Linux host that requires sudo, do no
 Recommended steps:
 - Generate streams on Windows with FloppyAI (you can test with `--simulate` first):
   ```bash
-  python FloppyAI/src/main.py generate 80 0 --revs 1 --density 1.2 --pattern prbs7 --output-dir .\test_outputs\to_linux
+  python src/main.py generate 80 0 --revs 1 --density 1.2 --pattern prbs7 --output-dir .\test_outputs\to_linux
   ```
 - Transfer the generated `.raw` file(s) to the Linux DTC host (USB/share/etc.).
 - On Linux, run your bash script(s) to write and then read back captures with dtc (sudo as needed). For example:
@@ -171,7 +171,7 @@ Recommended steps:
   ```
 - Transfer captured `.raw` back to Windows and analyze:
   ```bash
-  python FloppyAI/src/main.py analyze path\to\captured_80_0.raw --output-dir .\test_outputs\captures
+  python src/main.py analyze path\to\captured_80_0.raw --output-dir .\test_outputs\captures
   ```
 
 Notes:
@@ -190,4 +190,4 @@ Notes:
   - Run `analyze_disk` for each read first (pointing to the read directory), then re-run `compare_reads` using those run output folders or the direct JSON paths.
 
 - Module cannot be found:
-  - Ensure you run commands from the repository root with `python -m FloppyAI.src.main ...`.
+  - Ensure you run commands from the `FloppyAI/` directory with `python -m src.main ...`.
