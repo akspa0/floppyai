@@ -6,7 +6,7 @@ Probe a KryoFlux STREAM file to dump OOB blocks, ISB opcode histogram, and sanit
 metrics. Useful for comparing generated streams against DTC-captured references.
 
 Usage:
-  python3 FloppyAI/tools/kfx_probe.py --input path/to/track00.0.raw [--max 0]
+  python tools/kfx_probe.py --input path/to/track00.0.raw [--max 0] [--validate]
 
 Notes:
 - This is a read-only inspection tool. It does not modify input files.
@@ -22,6 +22,28 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from typing import Dict, Tuple
+
+
+def _extract_clocks_from_kfinfo(text: str) -> Tuple[float | None, float | None]:
+    """Parse sck and ick values from the KFInfo ASCII string, if present."""
+    sck = None
+    ick = None
+    try:
+        parts = [p.strip() for p in text.split(',')]
+        for p in parts:
+            if p.startswith('sck='):
+                try:
+                    sck = float(p.split('=', 1)[1].strip())
+                except Exception:
+                    pass
+            if p.startswith('ick='):
+                try:
+                    ick = float(p.split('=', 1)[1].strip())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return sck, ick
 
 
 def parse_stream(data: bytes) -> Dict[str, object]:
@@ -108,6 +130,7 @@ def parse_stream(data: bytes) -> Dict[str, object]:
             # OVL16
             hist["OVL16"] += 1
             ovl16_count += 1
+            isb_bytes += 1
             pos += 1
             continue
         if b == 0x0C:
@@ -179,10 +202,173 @@ def parse_stream(data: bytes) -> Dict[str, object]:
     }
 
 
+def validate_stream(data: bytes) -> Dict[str, object]:
+    """Run structural validations and return a report with issues.
+
+    Checks:
+    - StreamPosition (SP) in StreamInfo/StreamEnd/Index equals ISB bytes at insertion
+    - Index.SampleCounter equals ticks of the most recent flux interval
+    - Index.IndexCounter equals round(elapsed_sck_ticks/sck_hz*ick_hz) when clocks found in KFInfo
+    - At least one flux value appears after the final Index and before StreamEnd (dummy flux)
+    """
+    pos = 0
+    n = len(data)
+    isb_bytes = 0
+    flux_sum_ticks = 0
+    last_flux_ticks = 0
+    ovl16_count = 0
+    issues: list[str] = []
+    notes: list[str] = []
+    sck_hz: float | None = None
+    ick_hz: float | None = None
+    saw_flux_after_last_index = False
+    seen_any_index = False
+    last_index_offset: int | None = None
+
+    while pos < n:
+        b = data[pos]
+        # OOB
+        if b == 0x0D and pos + 3 < n:
+            oob_type = data[pos + 1]
+            size_le = data[pos + 2] | (data[pos + 3] << 8)
+            payload_start = pos + 4
+            payload_end = payload_start + size_le
+            if oob_type == 0x0D:
+                # EOF
+                break
+            if payload_end > n:
+                issues.append(f"OOB @0x{pos:08X}: truncated block type=0x{oob_type:02X} size={size_le}")
+                break
+
+            # Parse clocks from KFInfo if available
+            if oob_type == 0x04:
+                try:
+                    s = data[payload_start:payload_end].split(b"\x00", 1)[0].decode("ascii", errors="replace")
+                    sck, ick = _extract_clocks_from_kfinfo(s)
+                    if sck:
+                        sck_hz = sck
+                    if ick:
+                        ick_hz = ick
+                except Exception:
+                    pass
+
+            # StreamInfo SP check
+            if oob_type == 0x01 and size_le == 8:
+                sp = int.from_bytes(data[payload_start:payload_start+4], "little", signed=False)
+                if sp != isb_bytes:
+                    issues.append(f"StreamInfo SP mismatch @0x{pos:08X}: sp={sp} isb={isb_bytes}")
+
+            # StreamEnd SP check and dummy-flux-after-last-index check
+            if oob_type == 0x03 and size_le == 8:
+                sp = int.from_bytes(data[payload_start:payload_start+4], "little", signed=False)
+                if sp != isb_bytes:
+                    issues.append(f"StreamEnd SP mismatch @0x{pos:08X}: sp={sp} isb={isb_bytes}")
+                if seen_any_index and not saw_flux_after_last_index:
+                    issues.append(
+                        f"No flux after last Index before StreamEnd (expected dummy flux) — last Index @0x{(last_index_offset or 0):08X}"
+                    )
+
+            # Index checks
+            if oob_type == 0x02 and size_le == 12:
+                sp = int.from_bytes(data[payload_start:payload_start+4], "little", signed=False)
+                sc = int.from_bytes(data[payload_start+4:payload_start+8], "little", signed=False)
+                ic = int.from_bytes(data[payload_start+8:payload_start+12], "little", signed=False)
+                if sp != isb_bytes:
+                    issues.append(f"Index SP mismatch @0x{pos:08X}: sp={sp} isb={isb_bytes}")
+                # SampleCounter: ticks since last flux
+                if sc != last_flux_ticks:
+                    issues.append(
+                        f"Index SampleCounter mismatch @0x{pos:08X}: sc={sc} last_flux_ticks={last_flux_ticks}"
+                    )
+                # IndexCounter: requires clocks
+                if sck_hz and ick_hz:
+                    expected_ic = int(round((float(flux_sum_ticks) / float(sck_hz)) * float(ick_hz)))
+                    if ic != expected_ic:
+                        issues.append(
+                            f"IndexCounter mismatch @0x{pos:08X}: ic={ic} expected={expected_ic} (sck={sck_hz}, ick={ick_hz})"
+                        )
+                seen_any_index = True
+                saw_flux_after_last_index = False
+                last_index_offset = pos
+
+            # Advance past OOB
+            pos = payload_end
+            continue
+
+        # ISB path
+        if b == 0x0B:
+            # OVL16
+            ovl16_count += 1
+            isb_bytes += 1
+            pos += 1
+            continue
+        if b == 0x0C:
+            if pos + 2 >= n:
+                break
+            b1 = data[pos + 1]
+            b2 = data[pos + 2]
+            val = ((b1 << 8) | b2) + (ovl16_count * 0x10000)
+            ovl16_count = 0
+            flux_sum_ticks += val
+            last_flux_ticks = val
+            isb_bytes += 3
+            if seen_any_index:
+                saw_flux_after_last_index = True
+            pos += 3
+            continue
+        if b in (0x08, 0x09, 0x0A):
+            if b == 0x08:
+                isb_bytes += 1
+                pos += 1
+            elif b == 0x09:
+                isb_bytes += 2
+                pos += 2
+            else:
+                if pos + 2 >= n:
+                    break
+                isb_bytes += 3
+                pos += 3
+            continue
+        if 0x00 <= b <= 0x07:
+            if pos + 1 >= n:
+                break
+            v1 = data[pos + 1]
+            val = ((b & 0x07) << 8) + v1 + (ovl16_count * 0x10000)
+            ovl16_count = 0
+            flux_sum_ticks += val
+            last_flux_ticks = val
+            isb_bytes += 2
+            if seen_any_index:
+                saw_flux_after_last_index = True
+            pos += 2
+            continue
+        if 0x0E <= b <= 0xFF:
+            val = b + (ovl16_count * 0x10000)
+            ovl16_count = 0
+            flux_sum_ticks += val
+            last_flux_ticks = val
+            isb_bytes += 1
+            if seen_any_index:
+                saw_flux_after_last_index = True
+            pos += 1
+            continue
+        break
+
+    ok = len(issues) == 0
+    return {
+        "ok": ok,
+        "issues": issues,
+        "notes": notes,
+        "sck_hz": sck_hz,
+        "ick_hz": ick_hz,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Probe a KryoFlux STREAM file for OOB/ISB structure")
     ap.add_argument("--input", required=True, help="Path to .raw stream file")
     ap.add_argument("--max", type=int, default=0, help="Optional max bytes to read (0 = whole file)")
+    ap.add_argument("--validate", action="store_true", help="Run structural checks and exit non-zero on failure")
     args = ap.parse_args()
 
     p = Path(args.input)
@@ -211,6 +397,17 @@ def main() -> int:
         if parsed:
             for pk, pv in parsed.items():
                 print(f"    - {pk}: {pv}")
+
+    if args.validate:
+        print("\nValidation:")
+        v = validate_stream(data)
+        if v["ok"]:
+            print("  OK — no structural issues found.")
+        else:
+            print(f"  FAIL — {len(v['issues'])} issue(s) found:")
+            for line in v["issues"]:
+                print(f"    - {line}")
+        return 0 if v["ok"] else 1
 
     return 0
 
