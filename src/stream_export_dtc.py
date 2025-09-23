@@ -33,6 +33,11 @@ def write_kryoflux_stream_dtc(
     include_streaminfo: bool = True,
     streaminfo_chunk_bytes: int = 32756,
     streaminfo_transfer_ms: int = 170,
+    # Safe-writer sanitizer (enabled by default)
+    sanitize: bool = True,
+    sanitize_min_ns: int = 2000,
+    sanitize_keepalive_ns: int = 8_000_000,
+    sanitize_max_ns: int = 65_000_000,
 ) -> None:
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -68,12 +73,39 @@ def write_kryoflux_stream_dtc(
         sz = len(payload)
         return bytes((0x0D, typ, sz & 0xFF, (sz >> 8) & 0xFF)) + payload
 
+    def _sanitize_intervals(intervals_ns: List[int], rev_time_ns: int) -> List[int]:
+        if not sanitize:
+            return list(intervals_ns)
+        mn = max(50, int(sanitize_min_ns))
+        mx = max(mn, int(sanitize_max_ns))
+        ka = int(sanitize_keepalive_ns) if int(sanitize_keepalive_ns) > 0 else mx
+        # split large gaps by keepalive
+        out: List[int] = []
+        for v in intervals_ns:
+            vv = int(v)
+            if vv > ka:
+                rem = vv
+                while rem > ka:
+                    out.append(ka)
+                    rem -= ka
+                if rem > 0:
+                    out.append(rem)
+            else:
+                out.append(vv)
+        # clamp
+        out = [max(mn, min(int(v), mx)) for v in out]
+        # adjust last to hit target
+        if out:
+            total = sum(out)
+            out[-1] = max(mn, min(mx, out[-1] + (int(rev_time_ns) - total)))
+        return out
+
     # Prepare revolution splits
     if num_revs <= 0:
         num_revs = 1
     # Use plain Python lists to avoid hard numpy dependency
-    intervals = list(flux_intervals)
-    n = len(intervals)
+    base_intervals = list(flux_intervals)
+    n = len(base_intervals)
     if rev_lengths is not None and len(rev_lengths) == num_revs:
         splits = list(rev_lengths)
     else:
@@ -85,6 +117,21 @@ def write_kryoflux_stream_dtc(
             splits = [base] * num_revs
             if rem:
                 splits[-1] += rem
+
+    # Apply safe-writer sanitizer per revolution to preserve index boundaries
+    sanitized_intervals: List[int] = []
+    sanitized_splits: List[int] = []
+    pos0 = 0
+    for cnt in splits:
+        rev_seq = base_intervals[pos0:pos0+cnt]
+        pos0 += cnt
+        rev_time_ns = sum(int(x) for x in rev_seq) if rev_seq else 0
+        rev_seq_s = _sanitize_intervals(rev_seq, rev_time_ns)
+        sanitized_intervals.extend(rev_seq_s)
+        sanitized_splits.append(len(rev_seq_s))
+
+    intervals = sanitized_intervals
+    splits = sanitized_splits
 
     # Build OOB header matching DTC ordering/content
     stream = bytearray()

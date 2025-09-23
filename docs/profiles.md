@@ -16,6 +16,7 @@ Each profile file (e.g., `35HD.json`) declares media characteristics (RPM, safe 
 - 525DD (5.25" 360KB, MFM)
 - 525DDGCR (5.25" Apple II family, GCR)
 - auto (generic fallback; conservative defaults)
+- safe-usb (generator patterns only): conservative bitcells and enabled flux sanitizer for hardware-friendly streams
 
 ## What Profiles Control
 
@@ -63,6 +64,10 @@ If neither `--profile` nor `--rpm` is provided, FloppyAI defaults to `RPM=300.0`
 - Uses profile-specified interval histogram min/max where applicable
 
 If no profile is provided, data-driven heuristics are used (current defaults remain for backward compatibility).
+
+## Sanitizer and Safe-USB
+
+The `safe-usb` generator profile enables the flux sanitizer to clamp very short cells and split very long gaps (keepalive), helping stability on modern USB controllers. See `docs/sanitizing_flux.md` for details and advanced flags.
 
 ## Overlays and Profiles
 

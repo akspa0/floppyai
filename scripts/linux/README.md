@@ -14,8 +14,8 @@ Write a `.raw` test pattern to a specified track/side and then read back N revol
 
 Example:
 ```bash
-chmod +x FloppyAI/scripts/linux/dtc_write_read.sh
-FloppyAI/scripts/linux/dtc_write_read.sh \
+chmod +x scripts/linux/dtc_write_read.sh
+scripts/linux/dtc_write_read.sh \
   --write /path/to/generated.raw --track 80 --side 0 --revs 3 \
   --out-dir ./captures --drive 0
 ```
@@ -27,7 +27,7 @@ Options:
 - `--revs <N>`: Revolutions to read back (default: 3)
 - `--drive <N>`: DTC drive index (default: 0)
 - `--dtc-path <path>`: Path to `dtc` binary (default: `dtc` in PATH)
-- `--out-dir <dir>`: Output directory for captured `.raw` and logs (default: `FloppyAI/output_captures`)
+- `--out-dir <dir>`: Output directory for captured `.raw` and logs (default: `./output_captures`)
 - `--label <name>`: Label prefix for output filenames (optional)
 - `--no-sudo`: Do not prefix commands with `sudo` (default: sudo on)
 - `--dry-run`: Print commands without executing
@@ -39,14 +39,14 @@ Outputs:
 ## Notes
 - Use sacrificial media, prefer outer tracks, and allow cool-downs between writes.
 - All read commands use `-f<prefix> -i0 ...`; all write-from-stream commands use `-f<basename> -wi4 ...`.
-- For cross‑machine workflow details, see `FloppyAI/docs/usage.md` → “Cross‑machine (Linux DTC) workflow”.
+- For cross‑machine workflow details, see `docs/usage.md` → “Cross‑machine (Linux DTC) workflow”.
 
 ---
 
 ## Script: capture_forensic_full_disk.sh
 Forensic STREAM capture across a full disk.
 
-- Defaults: 83 tracks (0..82), `--revs 3`, outputs under `FloppyAI/output_captures/<label>_<ts>/`
+- Defaults: 83 tracks (0..82), `--revs 3`, outputs under `./output_captures/<label>_<ts>/`
 - Flags:
   - `--profile 35HD|35DD|525HD|525DD`
   - `--sides both|0|1`, `--start-track`, `--end-track`, `--step`
@@ -58,7 +58,7 @@ Forensic STREAM capture across a full disk.
 
 Example:
 ```bash
-FloppyAI/scripts/linux/capture_forensic_full_disk.sh \
+scripts/linux/capture_forensic_full_disk.sh \
   --profile 35HD --sides both --revs 3 --passes 2 --sanity --corpus
 ```
 
@@ -70,7 +70,7 @@ Repeat-capture a single track/side several times.
 
 Example:
 ```bash
-FloppyAI/scripts/linux/capture_forensic_repeat_track.sh --track 0 --side 0 --repeats 5 --revs 3 --sanity
+scripts/linux/capture_forensic_repeat_track.sh --track 0 --side 0 --repeats 5 --revs 3 --sanity
 ```
 
 ## Script: capture_forensic_sweep.sh
@@ -88,15 +88,15 @@ Single track/side with many revolutions (e.g., 16–64) for high-fidelity stats.
 Minimal dtc read test (bare flags) to validate that `dtc` is writing files.
 
 ```bash
-FloppyAI/scripts/linux/dtc_minimal_test.sh --dir FloppyAI/output_captures/test_min
+scripts/linux/dtc_minimal_test.sh --dir output_captures/test_min
 ```
 
 ## Script: dtc_write_read_set.sh
 Write a whole set of NN.S.raw with `-wi4` and (optionally) read back captures.
 
 ```bash
-FloppyAI/scripts/linux/dtc_write_read_set.sh \
-  --image-dir ./pattern_set --drive 0 --revs 3 --out-dir FloppyAI/output_captures/my_run --read-back
+scripts/linux/dtc_write_read_set.sh \
+  --image-dir ./pattern_set --drive 0 --revs 3 --out-dir ./output_captures/my_run --read-back
 ```
 
 ## Script: dtc_probe.sh
@@ -104,17 +104,17 @@ Probe drive capacity and RPM.
 
 ```bash
 # Capacity (track reach)
-FloppyAI/scripts/linux/dtc_probe.sh --drive 0 --capacity
+scripts/linux/dtc_probe.sh --drive 0 --capacity
 
 # RPM (averaged over N seconds; clean exit via SIGINT)
-FloppyAI/scripts/linux/dtc_probe.sh --drive 0 --rpm --seconds 6
+scripts/linux/dtc_probe.sh --drive 0 --rpm --seconds 6
 ```
 
 ## Script: experiment_write_read_analyze.sh
 Turnkey: generate NN.S.raw patterns → write with `-wi4` → read with `-i0` → analyze.
 
 ```bash
-FloppyAI/scripts/linux/experiment_write_read_analyze.sh \
+scripts/linux/experiment_write_read_analyze.sh \
   --tracks 0-82 --sides 0,1 --revs 3 --drive 0 \
   --label pat_const4us --pattern constant --interval-ns 4000 --rev-time-ns 200000000 --sanity
 ```

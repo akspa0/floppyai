@@ -230,20 +230,64 @@ def build_intervals(pattern: str, rev_time_ns: int, **kw) -> List[int]:
         # Initialize LFSR with non-zero state
         state = (seed & 0x7F) or 0x5A
         intervals: List[int] = []
-        total = 0
-        while total < rev_time_ns:
-            # PRBS7 taps: x^7 + x^6 + 1 (typical)
-            new_bit = ((state >> 6) ^ (state >> 5)) & 1
-            state = ((state << 1) & 0x7F) | new_bit
+        for _ in range(int(kw.get("interval_count", 512))):
+            # taps x^7 + x^6 + 1 => feedback = bit6 XOR bit5 of 7-bit register
+            fb = ((state >> 6) & 1) ^ ((state >> 5) & 1)
+            state = ((state << 1) & 0x7E) | fb
             bit = state & 1
-            ns = max(50, short_ns if bit else long_ns)
-            intervals.append(ns)
-            total += ns
+            ns = max(50, long_ns if bit == 0 else short_ns)
+            intervals.append(int(ns))
+        # Normalize last to hit target time
+        total = sum(intervals)
         if intervals:
-            intervals[-1] = max(50, intervals[-1] - (total - rev_time_ns))
+            intervals[-1] = max(50, intervals[-1] + (rev_time_ns - total))
         return intervals
     else:
         raise ValueError(f"Unknown pattern: {pattern}")
+
+
+# -----------------------------
+# Sanitizer: clamp/split intervals
+# -----------------------------
+def sanitize_intervals(
+    intervals: List[int],
+    rev_time_ns: int,
+    min_ns: int = 2000,
+    max_ns: int = 65_000_000,
+    keepalive_ns: int = 8_000_000,
+) -> List[int]:
+    """
+    Pre-sanitize flux intervals to avoid hardware-hostile values.
+    - Clamp too-short cells up to min_ns.
+    - Split too-long cells into multiple sub-intervals so no single gap exceeds keepalive_ns (preferred) or max_ns.
+    - Preserve total revolution time by adjusting the final interval.
+    """
+    if min_ns < 50:
+        min_ns = 50
+    if max_ns < min_ns:
+        max_ns = min_ns
+    if keepalive_ns <= 0:
+        keepalive_ns = max_ns
+    out: List[int] = []
+    for v in intervals:
+        # Enforce keepalive: split massive gaps into chunks <= keepalive_ns
+        if v > keepalive_ns:
+            rem = int(v)
+            chunk = int(keepalive_ns)
+            while rem > keepalive_ns:
+                out.append(chunk)
+                rem -= chunk
+            if rem > 0:
+                out.append(rem)
+        else:
+            out.append(int(v))
+    # Clamp to [min_ns, max_ns]
+    out = [max(min_ns, min(int(v), max_ns)) for v in out]
+    # Adjust last to hit target rev_time_ns exactly
+    total = sum(out)
+    if out:
+        out[-1] = max(min_ns, min(max_ns, out[-1] + (rev_time_ns - total)))
+    return out
 
 
 def main(argv: List[str]) -> int:
@@ -281,6 +325,11 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--threshold", type=int, default=140, help="Binarization threshold for image pattern (0..255)")
     # Profile preset (shortcuts for common configurations)
     ap.add_argument("--profile", help="Preset profile name to avoid long CLI chains")
+    # Sanitizer toggles
+    ap.add_argument("--sanitize", action="store_true", help="Enable flux sanitizer: clamp min, split long gaps (keepalive), cap max")
+    ap.add_argument("--sanitize-min-ns", type=int, default=2000, help="Minimum interval (ns) after clamping (default 2000 ns ~ 2us)")
+    ap.add_argument("--sanitize-keepalive-ns", type=int, default=8_000_000, help="Maximum single gap (ns) before splitting into chunks (default 8 ms)")
+    ap.add_argument("--sanitize-max-ns", type=int, default=65_000_000, help="Absolute cap for any single interval (ns) (default 65 ms)")
     ap.add_argument("--output-dir", required=True, help="Directory to write NN.S.raw set")
     args = ap.parse_args(argv)
 
@@ -293,6 +342,19 @@ def main(argv: List[str]) -> int:
         "prbs7-default": {"pattern": "prbs7", "long_ns": 4200, "short_ns": 2200, "revs": 3, "writer": "strict-dtc"},
         # Image/silkscreen (radial)
         "image-radial": {"pattern": "image", "threshold": 140, "long_ns": 4200, "short_ns": 2200, "revs": 3, "writer": "strict-dtc"},
+        # Conservative, hardware-friendly defaults for USB controllers
+        "safe-usb": {
+            "pattern": "constant",
+            "interval_ns": 4200,
+            "long_ns": 4200,
+            "short_ns": 2200,
+            "revs": 3,
+            "writer": "strict-dtc",
+            "sanitize": True,
+            "sanitize_min_ns": 2000,
+            "sanitize_keepalive_ns": 8_000_000,
+            "sanitize_max_ns": 65_000_000,
+        },
     }
 
     def apply_profile(a) -> None:
@@ -350,6 +412,15 @@ def main(argv: List[str]) -> int:
                     threshold=int(args.threshold),
                     row_fraction=float(row_fraction),
                 )
+                # Optional sanitizer to make flux hardware-friendly
+                if bool(getattr(args, "sanitize", False)):
+                    part = sanitize_intervals(
+                        part,
+                        rev_time_ns=int(args.rev_time_ns),
+                        min_ns=int(args.sanitize_min_ns),
+                        max_ns=int(args.sanitize_max_ns),
+                        keepalive_ns=int(args.sanitize_keepalive_ns),
+                    )
                 intervals.extend(part)
                 rev_lens.append(len(part))
             # Write trackNN.S.raw (provide exact per-rev lengths to align OOB indices)
