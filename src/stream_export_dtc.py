@@ -94,7 +94,11 @@ def write_kryoflux_stream_dtc(
     host_date = now.strftime('%Y.%m.%d')
     host_time = now.strftime('%H:%M:%S')
     info1 = f"host_date={host_date}, host_time={host_time}, hc=0"
-    stream.extend(oob_block(0x04, info1.encode('ascii')))
+    b_info1 = info1.encode('ascii')
+    # CAPS/DTC reference commonly shows size 47 for this OOB; pad with spaces if shorter
+    if len(b_info1) < 47:
+        b_info1 = b_info1 + b" " * (47 - len(b_info1))
+    stream.extend(oob_block(0x04, b_info1))
 
     # KFInfo #2: device info + sck/ick (no NUL terminator)
     dev_date = now.strftime('%b %d %Y')   # e.g., "Mar 27 2018"
@@ -119,7 +123,11 @@ def write_kryoflux_stream_dtc(
         f"name=KryoFlux DiskSystem, version={version}, date={dev_date}, time={dev_time}, "
         f"hwid=1, hwrv=1, hs=1, sck={fmt_float(sck_hz)}, ick={fmt_float(ick_hz)}"
     )
-    stream.extend(oob_block(0x04, info2.encode('ascii')))
+    b_info2 = info2.encode('ascii')
+    # CAPS/DTC reference commonly shows size 141 for this OOB; pad with spaces if shorter
+    if len(b_info2) < 141:
+        b_info2 = b_info2 + b" " * (141 - len(b_info2))
+    stream.extend(oob_block(0x04, b_info2))
 
     # Optional initial StreamInfo (SP=0, ms=0)
     isb_bytes = 0

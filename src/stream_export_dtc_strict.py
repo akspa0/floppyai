@@ -23,7 +23,7 @@ def write_kryoflux_stream_dtc_strict(
     side: int,
     output_path: str,
     num_revs: int = 1,
-    version: str = "3.50",
+    version: str = "3.00s",
     rpm: float | None = None,
     sck_hz: float = 24027428.5714285,
     rev_lengths: List[int] | None = None,
@@ -43,13 +43,15 @@ def write_kryoflux_stream_dtc_strict(
     """Write a DTC-compatible STREAM with enforced OOB-first header and KFInfo semantics."""
     # Force OOB-first header regardless of caller input
     forced_header_mode = "oob"
+    # Force DTC reference-friendly version string regardless of caller
+    forced_version = "3.00s"
     _baseline_write(
         flux_intervals=flux_intervals,
         track=track,
         side=side,
         output_path=output_path,
         num_revs=num_revs,
-        version=version,
+        version=forced_version,
         rpm=rpm,
         sck_hz=sck_hz,
         rev_lengths=rev_lengths,
